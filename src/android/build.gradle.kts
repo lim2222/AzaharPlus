@@ -14,6 +14,10 @@ tasks.register("clean").configure {
     delete(rootProject.layout.buildDirectory)
 }
 
+subprojects {
+    tasks.register("prepareKotlinBuildScriptModel")
+}
+
 buildscript {
     repositories {
         google()
