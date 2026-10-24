@@ -20,7 +20,7 @@ plugins {
  * next 680 years.
  */
 val autoVersion = (((System.currentTimeMillis() / 1000) - 1451606400) / 10).toInt()
-val abiFilter = listOf("arm64-v8a", "x86_64")
+val abiFilter = listOf("arm64-v8a") // 移除 "x86_64"，直接节省一半编译缓存空间
 
 val downloadedJniLibsPath = "${layout.buildDirectory.get().asFile.path}/downloadedJniLibs"
 
@@ -63,12 +63,12 @@ android {
         // The application ID refers to Lime3DS to allow for
         // the Play Store listing, which was originally set up for Lime3DS, to still be used.
         // applicationId = "org.azahar_emu.azahar"
-        applicationId = "io.github.lime3ds.android"
+        applicationId = "io.github.azaharplus.taiko"
 
         minSdk = 28
         targetSdk = 35
         versionCode = autoVersion
-        versionName = getGitVersion()
+        versionName = "${getGitVersion()}+taiko1.0"
 
         ndk {
             //noinspection ChromeOsAbiSupport
@@ -88,7 +88,7 @@ android {
             }
         }
 
-        buildConfigField("String", "GIT_VERSION", "\"${getGitVersion()}\"")
+        buildConfigField("String", "GIT_VERSION", "\"${getGitVersion()}+taiko1.0\"")
         // ^ Has no suffix, unlike VERSION_NAME
         buildConfigField("String", "GIT_HASH", "\"${getGitHash()}\"")
         buildConfigField("String", "BRANCH", "\"${getBranch()}\"")
