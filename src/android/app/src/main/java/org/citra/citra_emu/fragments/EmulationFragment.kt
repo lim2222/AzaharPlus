@@ -93,6 +93,7 @@ import org.citra.citra_emu.utils.GameIconUtils
 import org.citra.citra_emu.utils.Log
 import org.citra.citra_emu.utils.ViewUtils
 import org.citra.citra_emu.viewmodel.EmulationViewModel
+import org.citra.citra_emu.overlay.OverlayPrefs
 
 class EmulationFragment :
     Fragment(),
@@ -100,6 +101,9 @@ class EmulationFragment :
     Choreographer.FrameCallback {
     private val preferences: SharedPreferences
         get() = PreferenceManager.getDefaultSharedPreferences(CitraApplication.appContext)
+
+    private val overlayPrefs: SharedPreferences
+        get() = OverlayPrefs.prefs
 
     private lateinit var emulationState: EmulationState
     private var perfStatsUpdater: Runnable? = null
@@ -192,6 +196,7 @@ class EmulationFragment :
 
         try {
             game = args.game ?: intentGame!!
+            OverlayPrefs.setGame(game.titleId, game.path)
         } catch (e: NullPointerException) {
             Toast.makeText(
                 requireContext(),
@@ -887,6 +892,11 @@ class EmulationFragment :
                     true
                 }
 
+                R.id.menu_emulation_adjust_scale_button_tatacon -> {
+                    showAdjustScaleDialog("controlScale-tatacon")
+                    true
+                }
+
                 R.id.menu_emulation_adjust_opacity -> {
                     showAdjustOpacityDialog()
                     true
@@ -1319,16 +1329,16 @@ class EmulationFragment :
     }
 
     private fun showToggleControlsDialog() {
-        val editor = preferences.edit()
-        val enabledButtons = BooleanArray(17)
+        val editor = overlayPrefs.edit()
+        val enabledButtons = BooleanArray(18)
         enabledButtons.forEachIndexed { i: Int, _: Boolean ->
             // Buttons that are disabled by default
             var defaultValue = true
             when (i) {
                 // TODO: Remove these magic numbers
-                6, 7, 12, 13, 14, 15, 16 -> defaultValue = false
+                6, 7, 12, 13, 14, 15, 16, 17 -> defaultValue = false
             }
-            enabledButtons[i] = preferences.getBoolean("buttonToggle$i", defaultValue)
+            enabledButtons[i] = overlayPrefs.getBoolean("buttonToggle$i", defaultValue)
         }
 
         val dialog = MaterialAlertDialogBuilder(requireContext())
@@ -1366,7 +1376,7 @@ class EmulationFragment :
             val sliderMax = 150
             slider.valueFrom = sliderMin.toFloat()
             slider.valueTo = sliderMax.toFloat()
-            slider.value = preferences.getInt(target, sliderStart)
+            slider.value = overlayPrefs.getInt(target, sliderStart)
                 .toFloat()
                 .coerceIn(slider.valueFrom..slider.valueTo)
             @SuppressLint("SetTextI18n")
@@ -1426,7 +1436,7 @@ class EmulationFragment :
         sliderBinding.apply {
             slider.valueFrom = 0f
             slider.valueTo = 100f
-            slider.value = preferences.getInt("controlOpacity", 50).toFloat()
+            slider.value = overlayPrefs.getInt("controlOpacity", 50).toFloat()
             textValue.setText(slider.value.toInt().toString())
 
             textValue.addTextChangedListener(object : TextWatcher {
@@ -1473,14 +1483,14 @@ class EmulationFragment :
     }
 
     private fun setControlScale(scale: Int, target: String) {
-        preferences.edit()
+        overlayPrefs.edit()
             .putInt(target, scale)
             .apply()
         binding.surfaceInputOverlay.refreshControls()
     }
 
     private fun resetScale(target: String) {
-        preferences.edit().putInt(
+        overlayPrefs.edit().putInt(
             target,
             50
         ).apply()
@@ -1505,11 +1515,12 @@ class EmulationFragment :
         resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_SWAP)
         resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_TURBO)
         resetScale("controlScale-" + Hotkey.COMBO_BUTTON.button)
+        resetScale("controlScale-tatacon")
         binding.surfaceInputOverlay.refreshControls()
     }
 
     private fun setControlOpacity(opacity: Int) {
-        preferences.edit()
+        overlayPrefs.edit()
             .putInt("controlOpacity", opacity)
             .apply()
         binding.surfaceInputOverlay.refreshControls()
@@ -1527,16 +1538,16 @@ class EmulationFragment :
 
     private fun resetInputOverlay() {
         resetAllScales()
-        preferences.edit()
+        overlayPrefs.edit()
             .putInt("controlOpacity", 50)
             .apply()
 
-        val editor = preferences.edit()
+        val editor = overlayPrefs.edit()
         // TODO: This code sucks balls. We need to do this differently. -OS
-        for (i in 0 until 17) {
+        for (i in 0 until 18) {
             var defaultValue = true
             when (i) {
-                6, 7, 12, 13, 14, 15, 16 -> defaultValue = false
+                6, 7, 12, 13, 14, 15, 16, 17 -> defaultValue = false
             }
             editor.putBoolean("buttonToggle$i", defaultValue)
         }

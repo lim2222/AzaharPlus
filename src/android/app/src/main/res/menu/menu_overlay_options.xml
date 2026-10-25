@@ -85,6 +85,9 @@
             <item
                 android:id="@+id/menu_emulation_adjust_scale_button_combo"
                 android:title="@string/button_combo" />
+			<item
+				android:id="@+id/menu_emulation_adjust_scale_button_tatacon"
+				android:title="Taiko Drum" />	
         </menu>
     </item>
 

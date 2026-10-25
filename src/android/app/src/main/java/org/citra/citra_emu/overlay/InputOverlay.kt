@@ -14,18 +14,21 @@ import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.drawable.VectorDrawable
 import android.os.Build
+import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.AttributeSet
 import android.util.DisplayMetrics
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
 import android.view.View.OnTouchListener
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
-import androidx.preference.PreferenceManager
 import java.lang.NullPointerException
 import kotlin.math.min
-import org.citra.citra_emu.CitraApplication
 import org.citra.citra_emu.NativeLibrary
 import org.citra.citra_emu.R
 import org.citra.citra_emu.features.hotkeys.Hotkey
@@ -51,6 +54,25 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     private var buttonBeingConfigured: InputOverlayDrawableButton? = null
     private var dpadBeingConfigured: InputOverlayDrawableDpad? = null
     private var joystickBeingConfigured: InputOverlayDrawableJoystick? = null
+
+    // Taiko drum (TaTaCon) overlay, ported from the Dolphin fork.
+    private var overlayTaTaCon: InputOverlayDrawableTaTaCon? = null
+    private var tataconBeingConfigured: InputOverlayDrawableTaTaCon? = null
+
+    // Pointers that landed on the drum but could not be tracked (region already held by
+    // another finger). They are swallowed so they never reach the 3DS touchscreen.
+    private val tataconSwallowedPointers: MutableSet<Int> = HashSet()
+
+    private val vibrator: Vibrator? by lazy {
+        val ctx = context ?: return@lazy null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager?)
+                ?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator?
+        }
+    }
     private val settingsViewModel = NativeLibrary.sEmulationActivity.get()!!.settingsViewModel
 
     // Stores the ID of the pointer that interacted with the 3DS touchscreen.
@@ -82,6 +104,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         overlayButtons.forEach { it.draw(canvas) }
         overlayDpads.forEach { it.draw(canvas) }
         overlayJoysticks.forEach { it.draw(canvas) }
+        overlayTaTaCon?.draw(canvas)
     }
 
     private fun swapScreen() {
@@ -117,6 +140,11 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         val isActionUp =
             motionEvent == MotionEvent.ACTION_UP || motionEvent == MotionEvent.ACTION_POINTER_UP
 
+        // The drum is handled first. Pointers that belong to the drum must not reach the
+        // buttons or the 3DS touchscreen below.
+        val tataconPointers: Set<Int> =
+            overlayTaTaCon?.let { handleTaTaConTouch(it, event) } ?: emptySet()
+
         val pointerList = (0 until event.pointerCount).toMutableList()
         // Move the pointer that triggered the most recent event to the front
         // of the list so that it is processed first
@@ -128,6 +156,10 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         // (Only happens if we're dragging the touch)
         for (pointerIndex in pointerList) {
             val pointerId = event.getPointerId(pointerIndex)
+
+            if (pointerId in tataconPointers) {
+                if (isActionMove) continue else break
+            }
 
             var xPosition = event.getX(pointerIndex).toInt()
             var yPosition = event.getY(pointerIndex).toInt()
@@ -170,7 +202,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
             val hasActiveOverlay = hasActiveButtons || hasActiveDpad || hasActiveJoystick
 
-            if (preferences.getBoolean("isTouchEnabled", true) && !hasActiveOverlay) {
+            if (globalPreferences.getBoolean("isTouchEnabled", true) && !hasActiveOverlay) {
                 if (isActionMove) {
                     NativeLibrary.onTouchMoved(xPosition.toFloat(), yPosition.toFloat())
                     continue
@@ -194,6 +226,16 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                         continue
                     }
                     anyOverlayStateChanged = true
+
+                    // The overlay Home button is repurposed: it toggles the Taiko drum and is
+                    // not sent to the emulator.
+                    if (button.id == NativeLibrary.ButtonType.BUTTON_HOME) {
+                        if (button.status == NativeLibrary.ButtonState.PRESSED) {
+                            toggleTaTaCon()
+                        }
+                        shouldUpdateView = true
+                        continue
+                    }
 
                     if (button.id == NativeLibrary.ButtonType.BUTTON_SWAP &&
                         button.status == NativeLibrary.ButtonState.PRESSED
@@ -285,7 +327,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 invalidate()
             }
 
-            if (preferences.getBoolean("isTouchEnabled", true) &&
+            if (globalPreferences.getBoolean("isTouchEnabled", true) &&
                 isActionDown &&
                 !anyOverlayStateChanged
             ) {
@@ -426,7 +468,278 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 }
             }
         }
+
+        // TaTaCon drum: move only (size and opacity follow the global overlay sliders).
+        overlayTaTaCon?.let { tatacon ->
+            when (event.action and MotionEvent.ACTION_MASK) {
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_POINTER_DOWN -> if (tataconBeingConfigured == null &&
+                    buttonBeingConfigured == null &&
+                    dpadBeingConfigured == null &&
+                    joystickBeingConfigured == null &&
+                    tatacon.isOnArtwork(fingerPositionX, fingerPositionY)
+                ) {
+                    tataconBeingConfigured = tatacon
+                    tatacon.onConfigureTouch(event, TaTaConEditAction.MOVE)
+                }
+
+                MotionEvent.ACTION_MOVE -> if (tataconBeingConfigured != null) {
+                    tatacon.onConfigureTouch(event, TaTaConEditAction.MOVE)
+                    invalidate()
+                }
+
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_POINTER_UP -> if (tataconBeingConfigured != null) {
+                    saveTaTaConPosition(
+                        orientation,
+                        tatacon.bounds.centerX(),
+                        tatacon.bounds.centerY()
+                    )
+                    tataconBeingConfigured = null
+                }
+            }
+        }
         return true
+    }
+
+    // ---------------------------------------------------------------------------------
+    // TaTaCon (Taiko drum)
+    // ---------------------------------------------------------------------------------
+
+    private fun pressTaTaCon(
+        t: InputOverlayDrawableTaTaCon,
+        region: TaTaConRegion,
+        pointerId: Int
+    ): Boolean {
+        if (t.getTrackId(region) != -1) return false
+        t.setTrackId(region, pointerId)
+        t.setPressedState(region, true)
+        NativeLibrary.onGamePadEvent(
+            NativeLibrary.TOUCHSCREEN_DEVICE,
+            t.getLegacyId(region),
+            NativeLibrary.ButtonState.PRESSED
+        )
+        triggerTaTaConHapticFeedback()
+        return true
+    }
+
+    private fun releaseTaTaCon(t: InputOverlayDrawableTaTaCon, region: TaTaConRegion) {
+        t.setPressedState(region, false)
+        NativeLibrary.onGamePadEvent(
+            NativeLibrary.TOUCHSCREEN_DEVICE,
+            t.getLegacyId(region),
+            NativeLibrary.ButtonState.RELEASED
+        )
+        t.setTrackId(region, -1)
+    }
+
+    private fun releaseAllTaTaCon(t: InputOverlayDrawableTaTaCon) {
+        for (region in TaTaConRegion.values()) {
+            if (t.getTrackId(region) != -1 || t.getPressedState(region)) {
+                releaseTaTaCon(t, region)
+            }
+        }
+        tataconSwallowedPointers.clear()
+    }
+
+    /**
+     * The rim covers the whole screen, so it must not fire when the touch is on top of another
+     * overlay control (the drum head is not guarded, like in the Dolphin version).
+     */
+    private fun isTaTaConBlocked(region: TaTaConRegion, x: Int, y: Int): Boolean {
+        if (region != TaTaConRegion.RIM_LEFT && region != TaTaConRegion.RIM_RIGHT) return false
+        for (button in overlayButtons) {
+            if (button.bounds.contains(x, y)) return true
+        }
+        for (dpad in overlayDpads) {
+            if (dpad.bounds.contains(x, y)) return true
+        }
+        for (joystick in overlayJoysticks) {
+            if (joystick.bounds.contains(x, y)) return true
+        }
+        return false
+    }
+
+    /**
+     * Handles one MotionEvent for the drum.
+     *
+     * @return IDs of the pointers owned by the drum for this event. The caller skips them.
+     */
+    private fun handleTaTaConTouch(t: InputOverlayDrawableTaTaCon, event: MotionEvent): Set<Int> {
+        val consumed = HashSet<Int>(tataconSwallowedPointers)
+        for (region in TaTaConRegion.values()) {
+            val id = t.getTrackId(region)
+            if (id != -1) consumed.add(id)
+        }
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN,
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                val index = event.actionIndex
+                val x = event.getX(index).toInt()
+                val y = event.getY(index).toInt()
+                val region = t.getRegionAt(x, y)
+                if (region != null && !isTaTaConBlocked(region, x, y)) {
+                    val pid = event.getPointerId(index)
+                    if (!pressTaTaCon(t, region, pid)) {
+                        // Region already held by another finger: swallow this one.
+                        tataconSwallowedPointers.add(pid)
+                    }
+                    consumed.add(pid)
+                    invalidate()
+                }
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                for (i in 0 until event.pointerCount) {
+                    val pid = event.getPointerId(i)
+                    val current = TaTaConRegion.values().firstOrNull { t.getTrackId(it) == pid }
+                        ?: continue
+                    val x = event.getX(i).toInt()
+                    val y = event.getY(i).toInt()
+                    val region = t.getRegionAt(x, y)?.takeIf { !isTaTaConBlocked(it, x, y) }
+                    if (region != current) {
+                        releaseTaTaCon(t, current)
+                        if (region != null) pressTaTaCon(t, region, pid)
+                        invalidate()
+                    }
+                }
+            }
+
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_POINTER_UP -> {
+                val pid = event.getPointerId(event.actionIndex)
+                TaTaConRegion.values().firstOrNull { t.getTrackId(it) == pid }
+                    ?.let { releaseTaTaCon(t, it) }
+                tataconSwallowedPointers.remove(pid)
+                invalidate()
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                releaseAllTaTaCon(t)
+                consumed.clear()
+                invalidate()
+            }
+        }
+        return consumed
+    }
+
+    /**
+     * Shows or hides the drum while the game is running (used by the Home overlay button).
+     * Only the drum is rebuilt; the other controls are left alone, so this is safe to call
+     * from inside onTouch. The state is saved so the toggle dialog stays in sync.
+     */
+    private fun toggleTaTaCon() {
+        val enable = overlayTaTaCon == null
+        preferences.edit().putBoolean("buttonToggle17", enable).apply()
+        if (enable) {
+            val orientation =
+                if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+                    "-Portrait"
+                } else {
+                    ""
+                }
+            createTaTaCon(orientation)
+        } else {
+            overlayTaTaCon?.let { releaseAllTaTaCon(it) }
+            overlayTaTaCon = null
+        }
+        hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        invalidate()
+    }
+
+    private fun createTaTaCon(orientation: String) {
+        val metrics = resources.displayMetrics
+        val screenWidth = metrics.widthPixels
+        val screenHeight = metrics.heightPixels
+        val minDimension = min(screenWidth, screenHeight)
+
+        // Same global size / opacity sliders as the other overlay controls, plus the
+        // per-control "controlScale-tatacon" slider.
+        val sizeFactor = (preferences.getInt("controlScale", 50) + 50) / 100f *
+            (preferences.getInt("controlScale-tatacon", 50) + 50) / 100f
+        val opacity = preferences.getInt("controlOpacity", 50) * 255 / 100
+
+        val artwork = InputOverlayDrawableTaTaCon.cropArtwork(
+            BitmapFactory.decodeResource(resources, R.drawable.tatacon)
+        )
+        val targetWidth = (minDimension * TATACON_SIZE_RATIO * sizeFactor).toInt()
+        val targetHeight = targetWidth * artwork.height / artwork.width
+        val bitmap = Bitmap.createScaledBitmap(artwork, targetWidth, targetHeight, true)
+
+        val tatacon = InputOverlayDrawableTaTaCon(
+            resources,
+            bitmap,
+            TATACON_BUTTON_HEAD_UP_LEFT,
+            TATACON_BUTTON_HEAD_DOWN_LEFT,
+            TATACON_BUTTON_HEAD_UP_RIGHT,
+            TATACON_BUTTON_HEAD_DOWN_RIGHT,
+            TATACON_BUTTON_RIM_LEFT,
+            TATACON_BUTTON_RIM_RIGHT
+        )
+
+        // Default: centered horizontally, drum head in the lower part of the screen.
+        val defaultX = (screenWidth - targetWidth) / 2
+        val defaultY = (screenHeight * TATACON_HEAD_Y_RATIO -
+            targetHeight * TATACON_HEAD_OFFSET_RATIO).toInt()
+        val defaultCenterX = (defaultX + targetWidth / 2f) / screenWidth
+        val defaultCenterY = (defaultY + targetHeight / 2f) / screenHeight
+        val centerX = preferences.getFloat("tatacon$orientation-CX", defaultCenterX)
+        val centerY = preferences.getFloat("tatacon$orientation-CY", defaultCenterY)
+
+        val drawableX = (centerX * screenWidth - targetWidth / 2f).toInt()
+        val drawableY = (centerY * screenHeight - targetHeight / 2f).toInt()
+        tatacon.setPosition(drawableX, drawableY)
+        tatacon.setBounds(drawableX, drawableY, drawableX + targetWidth, drawableY + targetHeight)
+        tatacon.setCustomOpacity(opacity)
+
+        // The rim is accepted over the whole screen. This also swallows touches that would
+        // otherwise reach the 3DS touchscreen; shrink this Rect if you want to keep part of
+        // the touchscreen usable while the drum is shown.
+        tatacon.setRimHitBounds(Rect(0, 0, screenWidth, screenHeight))
+        overlayTaTaCon = tatacon
+    }
+
+    private fun saveTaTaConPosition(orientation: String, centerX: Int, centerY: Int) {
+        val metrics = resources.displayMetrics
+        preferences.edit()
+            .putFloat("tatacon$orientation-CX", centerX.toFloat() / metrics.widthPixels)
+            .putFloat("tatacon$orientation-CY", centerY.toFloat() / metrics.heightPixels)
+            .apply()
+    }
+
+    /**
+     * Haptic feedback for a drum hit. Hits inside the debounce window are ignored so a second
+     * finger does not cancel the running vibration; rapid hits get a softer, longer pulse.
+     */
+    private fun triggerTaTaConHapticFeedback() {
+        if (!EmulationMenuSettings.hapticFeedback) return
+        val v = vibrator ?: return
+        if (!v.hasVibrator()) return
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            @Suppress("DEPRECATION")
+            v.vibrate(80L)
+            return
+        }
+
+        val now = SystemClock.uptimeMillis()
+        val delta = now - lastTaTaConHapticTime
+        if (delta < HAPTIC_TATACON_DEBOUNCE_MS) return
+        lastTaTaConHapticTime = now
+
+        val strength = HAPTIC_TATACON_STRENGTH
+        val norm = strength / 255f
+        val duration: Long
+        val amplitude: Int
+        if (delta < HAPTIC_TATACON_RAPID_WINDOW_MS) {
+            duration = 50L + Math.round(norm * 15f)
+            amplitude = maxOf(1, Math.round(strength * 0.33f))
+        } else {
+            duration = 45L + Math.round(norm * 40f)
+            amplitude = strength
+        }
+        v.vibrate(VibrationEffect.createOneShot(duration, amplitude))
     }
 
     private fun addOverlayControls(orientation: String) {
@@ -626,9 +939,16 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
+        // Taiko drum. Toggle id 17 has no entry in the overlay options menu yet.
+        if (preferences.getBoolean("buttonToggle17", false)) {
+            createTaTaCon(orientation)
+        }
     }
 
     fun refreshControls() {
+        // Release any drum key that is still held before the drum is rebuilt.
+        overlayTaTaCon?.let { releaseAllTaTaCon(it) }
+        overlayTaTaCon = null
         // Remove all the overlay buttons from the HashSet.
         overlayButtons.clear()
         overlayDpads.clear()
@@ -685,6 +1005,10 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     }
 
     fun resetButtonPlacement() {
+        preferences.edit()
+            .remove("tatacon-CX").remove("tatacon-CY")
+            .remove("tatacon-Portrait-CX").remove("tatacon-Portrait-CY")
+            .apply()
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (isLandscape) {
             defaultOverlayLandscape()
@@ -1050,8 +1374,34 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     override fun isInEditMode(): Boolean = isInEditMode
 
     companion object {
+        // Drum head: left half = D-pad left (up) / D-pad right (down),
+        //            right half = A (up) / B (down). Rim (outside the head): L / R.
+        private val TATACON_BUTTON_HEAD_UP_LEFT = NativeLibrary.ButtonType.DPAD_LEFT
+        private val TATACON_BUTTON_HEAD_DOWN_LEFT = NativeLibrary.ButtonType.DPAD_RIGHT
+        private val TATACON_BUTTON_HEAD_UP_RIGHT = NativeLibrary.ButtonType.BUTTON_A
+        private val TATACON_BUTTON_HEAD_DOWN_RIGHT = NativeLibrary.ButtonType.BUTTON_B
+        private val TATACON_BUTTON_RIM_LEFT = NativeLibrary.ButtonType.TRIGGER_L
+        private val TATACON_BUTTON_RIM_RIGHT = NativeLibrary.ButtonType.TRIGGER_R
+
+        /** Size of the drum artwork relative to the shorter screen dimension. */
+        private const val TATACON_SIZE_RATIO = 0.75f
+        /** Vertical position of the drum head relative to the screen height. */
+        private const val TATACON_HEAD_Y_RATIO = 0.70f
+        /** Vertical position of the drum head relative to the drum artwork height. */
+        private const val TATACON_HEAD_OFFSET_RATIO = 0.381f
+
+        private const val HAPTIC_TATACON_DEBOUNCE_MS = 35L
+        private const val HAPTIC_TATACON_RAPID_WINDOW_MS = 85L
+        private const val HAPTIC_TATACON_STRENGTH = 255
+        private var lastTaTaConHapticTime = 0L
+
+        // Overlay layout settings are stored per game (see OverlayPrefs).
         private val preferences
-            get() = PreferenceManager.getDefaultSharedPreferences(CitraApplication.appContext)
+            get() = OverlayPrefs.prefs
+
+        // Settings that are not part of the layout stay global.
+        private val globalPreferences
+            get() = OverlayPrefs.global
 
         /**
          * Resizes a [Bitmap] by a given scale factor
