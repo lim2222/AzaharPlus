@@ -47,6 +47,16 @@ import org.citra.citra_emu.utils.TurboHelper
 class InputOverlay(context: Context?, attrs: AttributeSet?) :
     SurfaceView(context, attrs),
     OnTouchListener {
+    /** What a drag does while the layout is being edited. */
+    enum class EditAction { MOVE, RESIZE, OPACITY }
+
+    var editAction: EditAction = EditAction.MOVE
+        private set
+
+    fun setEditAction(action: EditAction) {
+        editAction = action
+    }
+
     private val overlayButtons: MutableSet<InputOverlayDrawableButton> = HashSet()
     private val overlayDpads: MutableSet<InputOverlayDrawableDpad> = HashSet()
     private val overlayJoysticks: MutableSet<InputOverlayDrawableJoystick> = HashSet()
@@ -387,11 +397,11 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                         it.bounds.contains(fingerPositionX, fingerPositionY)
                     ) {
                         buttonBeingConfigured = it
-                        buttonBeingConfigured!!.onConfigureTouch(event)
+                        buttonBeingConfigured!!.onConfigureTouch(event, editAction)
                     }
 
                 MotionEvent.ACTION_MOVE -> if (buttonBeingConfigured != null) {
-                    buttonBeingConfigured!!.onConfigureTouch(event)
+                    buttonBeingConfigured!!.onConfigureTouch(event, editAction)
                     invalidate()
                     return true
                 }
@@ -399,13 +409,25 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (buttonBeingConfigured ==
                     it
                 ) {
-                    // Persist button position by saving new place.
-                    saveControlPosition(
-                        buttonBeingConfigured!!.id,
-                        buttonBeingConfigured!!.bounds.left,
-                        buttonBeingConfigured!!.bounds.top,
-                        orientation
-                    )
+                    val edited = buttonBeingConfigured!!
+                    when (editAction) {
+                        EditAction.MOVE -> saveControlPosition(
+                            edited.id, edited.bounds.left, edited.bounds.top, orientation
+                        )
+
+                        EditAction.RESIZE -> {
+                            saveScaleFromRatio("controlScale-${edited.id}$orientation", edited.resizeRatio)
+                            saveControlPosition(
+                                edited.id, edited.bounds.left, edited.bounds.top, orientation
+                            )
+                            // Rebuild with the new size; deferred because we are iterating
+                            // over the buttons right now.
+                            post { refreshControls() }
+                        }
+
+                        EditAction.OPACITY ->
+                            saveOpacity("controlOpacity-${edited.id}$orientation", edited.opacity)
+                    }
                     buttonBeingConfigured = null
                 }
             }
@@ -416,27 +438,39 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
                     // If no button is being moved now, remember the currently touched button to move.
                     if (buttonBeingConfigured == null &&
+                        dpadBeingConfigured == null &&
                         it.bounds.contains(fingerPositionX, fingerPositionY)
                     ) {
                         dpadBeingConfigured = it
-                        dpadBeingConfigured!!.onConfigureTouch(event)
+                        dpadBeingConfigured!!.onConfigureTouch(event, editAction)
                     }
 
                 MotionEvent.ACTION_MOVE -> if (dpadBeingConfigured != null) {
-                    dpadBeingConfigured!!.onConfigureTouch(event)
+                    dpadBeingConfigured!!.onConfigureTouch(event, editAction)
                     invalidate()
                     return true
                 }
 
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_POINTER_UP -> if (dpadBeingConfigured == it) {
-                    // Persist button position by saving new place.
-                    saveControlPosition(
-                        dpadBeingConfigured!!.upId,
-                        dpadBeingConfigured!!.bounds.left,
-                        dpadBeingConfigured!!.bounds.top,
-                        orientation
-                    )
+                    val edited = dpadBeingConfigured!!
+                    val scaleKey = "controlScale-" + NativeLibrary.ButtonType.DPAD + orientation
+                    val opacityKey = "controlOpacity-" + NativeLibrary.ButtonType.DPAD + orientation
+                    when (editAction) {
+                        EditAction.MOVE -> saveControlPosition(
+                            edited.upId, edited.bounds.left, edited.bounds.top, orientation
+                        )
+
+                        EditAction.RESIZE -> {
+                            saveScaleFromRatio(scaleKey, edited.resizeRatio)
+                            saveControlPosition(
+                                edited.upId, edited.bounds.left, edited.bounds.top, orientation
+                            )
+                            post { refreshControls() }
+                        }
+
+                        EditAction.OPACITY -> saveOpacity(opacityKey, edited.opacity)
+                    }
                     dpadBeingConfigured = null
                 }
             }
@@ -448,28 +482,40 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                     it.bounds.contains(fingerPositionX, fingerPositionY)
                 ) {
                     joystickBeingConfigured = it
-                    joystickBeingConfigured!!.onConfigureTouch(event)
+                    joystickBeingConfigured!!.onConfigureTouch(event, editAction)
                 }
 
                 MotionEvent.ACTION_MOVE -> if (joystickBeingConfigured != null) {
-                    joystickBeingConfigured!!.onConfigureTouch(event)
+                    joystickBeingConfigured!!.onConfigureTouch(event, editAction)
                     invalidate()
                 }
 
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_POINTER_UP -> if (joystickBeingConfigured != null) {
-                    saveControlPosition(
-                        joystickBeingConfigured!!.joystickId,
-                        joystickBeingConfigured!!.bounds.left,
-                        joystickBeingConfigured!!.bounds.top,
-                        orientation
-                    )
+                    val edited = joystickBeingConfigured!!
+                    val scaleKey = "controlScale-${edited.joystickId}$orientation"
+                    val opacityKey = "controlOpacity-${edited.joystickId}$orientation"
+                    when (editAction) {
+                        EditAction.MOVE -> saveControlPosition(
+                            edited.joystickId, edited.bounds.left, edited.bounds.top, orientation
+                        )
+
+                        EditAction.RESIZE -> {
+                            saveScaleFromRatio(scaleKey, edited.resizeRatio)
+                            saveControlPosition(
+                                edited.joystickId, edited.bounds.left, edited.bounds.top, orientation
+                            )
+                            post { refreshControls() }
+                        }
+
+                        EditAction.OPACITY -> saveOpacity(opacityKey, edited.opacity)
+                    }
                     joystickBeingConfigured = null
                 }
             }
         }
 
-        // TaTaCon drum: move only (size and opacity follow the global overlay sliders).
+        // TaTaCon drum: move, resize or change its opacity.
         overlayTaTaCon?.let { tatacon ->
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN,
@@ -480,26 +526,76 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                     tatacon.isOnArtwork(fingerPositionX, fingerPositionY)
                 ) {
                     tataconBeingConfigured = tatacon
-                    tatacon.onConfigureTouch(event, TaTaConEditAction.MOVE)
+                    tatacon.onConfigureTouch(event, editAction)
                 }
 
                 MotionEvent.ACTION_MOVE -> if (tataconBeingConfigured != null) {
-                    tatacon.onConfigureTouch(event, TaTaConEditAction.MOVE)
+                    tatacon.onConfigureTouch(event, editAction)
                     invalidate()
                 }
 
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_POINTER_UP -> if (tataconBeingConfigured != null) {
-                    saveTaTaConPosition(
-                        orientation,
-                        tatacon.bounds.centerX(),
-                        tatacon.bounds.centerY()
-                    )
+                    when (editAction) {
+                        EditAction.MOVE ->
+                            saveTaTaConPosition(
+                                orientation,
+                                tatacon.bounds.centerX(),
+                                tatacon.bounds.centerY()
+                            )
+
+                        EditAction.RESIZE -> {
+                            // Width goes into the usual scale value, the height is kept as an
+                            // aspect factor relative to the width.
+                            val ratioX = tatacon.resizeRatio
+                            val ratioY = tatacon.resizeRatioY
+                            saveScaleFromRatio("controlScale-tatacon$orientation", ratioX)
+                            saveAspectFromRatio("controlAspect-tatacon", orientation, ratioY / ratioX)
+                            saveTaTaConPosition(
+                                orientation,
+                                tatacon.bounds.centerX(),
+                                tatacon.bounds.centerY()
+                            )
+                            post { refreshControls() }
+                        }
+
+                        EditAction.OPACITY ->
+                            saveOpacity("controlOpacity-tatacon$orientation", tatacon.customOpacity)
+                    }
                     tataconBeingConfigured = null
                 }
             }
         }
         return true
+    }
+
+    /**
+     * Stores a new per-control scale so that the control ends up [ratio] times as big as it is
+     * now. The scale slider value v gives a size factor of (v + 50) / 100.
+     */
+    private fun saveScaleFromRatio(key: String, ratio: Float) {
+        // [key] may carry the "-Portrait" suffix; without a value of its own it starts from the
+        // shared one, like the code that builds the controls does.
+        val old = if (preferences.contains(key)) {
+            preferences.getInt(key, 50)
+        } else {
+            preferences.getInt(key.removeSuffix("-Portrait"), 50)
+        }
+        val new = Math.round((old + 50) * ratio - 50).coerceIn(0, 150)
+        preferences.edit().putInt(key, new).apply()
+    }
+
+    /** Multiplies the stored height/width factor of a control by [multiplier]. */
+    private fun saveAspectFromRatio(key: String, orientation: String, multiplier: Float) {
+        val old = getFloatPerOrient(key, orientation, 1.0f)
+        preferences.edit()
+            .putFloat(key + orientation, (old * multiplier).coerceIn(0.25f, 4.0f))
+            .apply()
+    }
+
+    /** Stores a per-control opacity (0..100, like the global opacity slider). */
+    private fun saveOpacity(key: String, opacity255: Int) {
+        preferences.edit().putInt(key, opacity255 * 100 / 255).apply()
     }
 
     // ---------------------------------------------------------------------------------
@@ -656,15 +752,19 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
         // Same global size / opacity sliders as the other overlay controls, plus the
         // per-control "controlScale-tatacon" slider.
-        val sizeFactor = (preferences.getInt("controlScale", 50) + 50) / 100f *
-            (preferences.getInt("controlScale-tatacon", 50) + 50) / 100f
-        val opacity = preferences.getInt("controlOpacity", 50) * 255 / 100
+        val sizeFactor = (getIntPerOrient("controlScale", orientation, 50) + 50) / 100f *
+            (getIntPerOrient("controlScale-tatacon", orientation, 50) + 50) / 100f
+        val opacity = getOpacityPerOrient("tatacon", orientation)
 
         val artwork = InputOverlayDrawableTaTaCon.cropArtwork(
             BitmapFactory.decodeResource(resources, R.drawable.tatacon)
         )
         val targetWidth = (minDimension * TATACON_SIZE_RATIO * sizeFactor).toInt()
-        val targetHeight = targetWidth * artwork.height / artwork.width
+        // Height relative to the natural proportions, changed with Resize in the layout editor.
+        val aspect = getFloatPerOrient("controlAspect-tatacon", orientation, 1.0f)
+        val targetHeight = (targetWidth.toFloat() * artwork.height / artwork.width * aspect)
+            .toInt()
+            .coerceAtLeast(1)
         val bitmap = Bitmap.createScaledBitmap(artwork, targetWidth, targetHeight, true)
 
         val tatacon = InputOverlayDrawableTaTaCon(
@@ -743,7 +843,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     }
 
     private fun addOverlayControls(orientation: String) {
-        if (preferences.getBoolean("buttonToggle0", true)) {
+        if (getBoolPerOrient("buttonToggle0", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -754,7 +854,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle1", true)) {
+        if (getBoolPerOrient("buttonToggle1", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -765,7 +865,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle2", true)) {
+        if (getBoolPerOrient("buttonToggle2", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -776,7 +876,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle3", true)) {
+        if (getBoolPerOrient("buttonToggle3", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -787,7 +887,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle4", true)) {
+        if (getBoolPerOrient("buttonToggle4", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -798,7 +898,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle5", true)) {
+        if (getBoolPerOrient("buttonToggle5", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -809,7 +909,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle6", false)) {
+        if (getBoolPerOrient("buttonToggle6", orientation, false)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -820,7 +920,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle7", false)) {
+        if (getBoolPerOrient("buttonToggle7", orientation, false)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -831,7 +931,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle8", true)) {
+        if (getBoolPerOrient("buttonToggle8", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -842,7 +942,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle9", true)) {
+        if (getBoolPerOrient("buttonToggle9", orientation, true)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -853,7 +953,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle10", true)) {
+        if (getBoolPerOrient("buttonToggle10", orientation, true)) {
             overlayDpads.add(
                 initializeOverlayDpad(
                     context,
@@ -868,7 +968,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle11", true)) {
+        if (getBoolPerOrient("buttonToggle11", orientation, true)) {
             overlayJoysticks.add(
                 initializeOverlayJoystick(
                     context,
@@ -880,7 +980,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle12", false)) {
+        if (getBoolPerOrient("buttonToggle12", orientation, false)) {
             overlayJoysticks.add(
                 initializeOverlayJoystick(
                     context,
@@ -892,7 +992,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        if (preferences.getBoolean("buttonToggle13", false)) {
+        if (getBoolPerOrient("buttonToggle13", orientation, false)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -904,7 +1004,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             )
         }
 
-        if (preferences.getBoolean("buttonToggle14", false)) {
+        if (getBoolPerOrient("buttonToggle14", orientation, false)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -916,7 +1016,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             )
         }
 
-        if (preferences.getBoolean("buttonToggle15", false)) {
+        if (getBoolPerOrient("buttonToggle15", orientation, false)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -928,7 +1028,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             )
         }
 
-        if (preferences.getBoolean("buttonToggle16", false)) {
+        if (getBoolPerOrient("buttonToggle16", orientation, false)) {
             overlayButtons.add(
                 initializeOverlayButton(
                     context,
@@ -940,7 +1040,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             )
         }
         // Taiko drum. Toggle id 17 has no entry in the overlay options menu yet.
-        if (preferences.getBoolean("buttonToggle17", false)) {
+        if (getBoolPerOrient("buttonToggle17", orientation, false)) {
             createTaTaCon(orientation)
         }
     }
@@ -1002,6 +1102,28 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         preferences.edit()
             .putBoolean("OverlayInit", true)
             .apply()
+    }
+
+    /**
+     * Resets the whole layout to its defaults: positions, per-control scales and per-control
+     * opacities. The global scale and opacity sliders and the shown-controls list are kept.
+     */
+    fun resetLayoutToDefault() {
+        val editor = preferences.edit()
+        for (key in preferences.all.keys) {
+            if (key.startsWith("controlScale-") ||
+                key.startsWith("controlOpacity-") ||
+                key.startsWith("controlAspect-")
+            ) {
+                editor.remove(key)
+            }
+        }
+        editor.apply()
+        buttonBeingConfigured = null
+        dpadBeingConfigured = null
+        joystickBeingConfigured = null
+        tataconBeingConfigured = null
+        resetButtonPlacement()
     }
 
     fun resetButtonPlacement() {
@@ -1403,6 +1525,32 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         private val globalPreferences
             get() = OverlayPrefs.global
 
+		// ---------- per-orientation ----------
+		private fun getIntPerOrient(key: String, orientation: String, def: Int): Int {
+			val perOrientKey = key + orientation
+			return if (preferences.contains(perOrientKey)) preferences.getInt(perOrientKey, def)
+			else preferences.getInt(key, def)
+		}
+		private fun getFloatPerOrient(key: String, orientation: String, def: Float): Float {
+			val perOrientKey = key + orientation
+			return if (preferences.contains(perOrientKey)) preferences.getFloat(perOrientKey, def)
+			else preferences.getFloat(key, def)
+		}
+		private fun getBoolPerOrient(key: String, orientation: String, def: Boolean): Boolean {
+			val perOrientKey = key + orientation
+			return if (preferences.contains(perOrientKey)) preferences.getBoolean(perOrientKey, def)
+			else preferences.getBoolean(key, def)
+		}
+		private fun getOpacityPerOrient(controlId: String, orientation: String): Int {
+			val perControlOrient = "controlOpacity-$controlId$orientation"
+			if (preferences.contains(perControlOrient)) return preferences.getInt(perControlOrient, 50) * 255 / 100
+			val perControl = "controlOpacity-$controlId"
+			if (preferences.contains(perControl)) return preferences.getInt(perControl, 50) * 255 / 100
+			val globalOrient = "controlOpacity$orientation"
+			if (preferences.contains(globalOrient)) return preferences.getInt(globalOrient, 50) * 255 / 100
+			return preferences.getInt("controlOpacity", 50) * 255 / 100
+		}
+
         /**
          * Resizes a [Bitmap] by a given scale factor
          *
@@ -1514,13 +1662,15 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
                 else -> 0.11f
             }
-            scale *= (preferences.getInt("controlScale", 50) + 50).toFloat()
+            // per-orientation fallback: orientation key -> global key
+            scale *= (getIntPerOrient("controlScale", orientation, 50) + 50).toFloat()
             scale /= 100f
 
-            scale *= (preferences.getInt("controlScale-$buttonId", 50) + 50).toFloat()
+            scale *= (getIntPerOrient("controlScale-$buttonId", orientation, 50) + 50).toFloat()
             scale /= 100f
 
-            val opacity: Int = preferences.getInt("controlOpacity", 50) * 255 / 100
+            // per-orientation opacity
+            val opacity: Int = getOpacityPerOrient(buttonId.toString(), orientation)
 
             // Initialize the InputOverlayDrawableButton.
             val defaultStateBitmap = getBitmap(context, defaultResId, scale)
@@ -1581,19 +1731,20 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
             // Decide scale based on button ID and user preference
             var scale = 0.22f
-            scale *= (preferences.getInt("controlScale", 50) + 50).toFloat()
+            scale *= (getIntPerOrient("controlScale", orientation, 50) + 50).toFloat()
             scale /= 100f
 
             scale *= (
-                preferences.getInt(
+                getIntPerOrient(
                     "controlScale-" + NativeLibrary.ButtonType.DPAD,
+                    orientation,
                     50
                 ) + 50
                 ).toFloat()
 
             scale /= 100f
 
-            val opacity: Int = preferences.getInt("controlOpacity", 50) * 255 / 100
+            val opacity: Int = getOpacityPerOrient(NativeLibrary.ButtonType.DPAD.toString(), orientation)
 
             // Initialize the InputOverlayDrawableDpad.
             val defaultStateBitmap = getBitmap(context, defaultResId, scale)
@@ -1651,13 +1802,13 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
             // Decide scale based on user preference
             var scale = 0.275f
-            scale *= (preferences.getInt("controlScale", 50) + 50).toFloat()
+            scale *= (getIntPerOrient("controlScale", orientation, 50) + 50).toFloat()
             scale /= 100f
 
-            scale *= (preferences.getInt("controlScale-$joystick", 50) + 50).toFloat()
+            scale *= (getIntPerOrient("controlScale-$joystick", orientation, 50) + 50).toFloat()
             scale /= 100f
 
-            val opacity: Int = preferences.getInt("controlOpacity", 50) * 255 / 100
+            val opacity: Int = getOpacityPerOrient(joystick.toString(), orientation)
 
             // Initialize the InputOverlayDrawableJoystick.
             val bitmapOuter = getBitmap(context, resOuter, scale)

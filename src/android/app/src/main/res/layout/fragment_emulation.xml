@@ -43,6 +43,110 @@
             android:text="@string/emulation_done"
             android:visibility="gone" />
 
+        <!-- Edit layout toolbar: Move / Resize / Opacity / Reset.
+             It can be dragged by its handle (or any part that is not a button) to get it out of
+             the way of the controls that are being edited. -->
+        <LinearLayout
+            android:id="@+id/edit_toolbar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal|top"
+            android:layout_marginTop="8dp"
+            android:background="#99000000"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="6dp"
+            android:visibility="gone">
+
+            <!-- Drag handle, touching it moves the whole toolbar -->
+            <TextView
+                android:id="@+id/edit_toolbar_handle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingEnd="8dp"
+                android:singleLine="true"
+                android:text="≡"
+                android:textColor="#FFFFFF"
+                android:textSize="22sp" />
+
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/edit_action_group"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:selectionRequired="true"
+                app:singleSelection="true">
+
+                <Button
+                    android:id="@+id/btn_edit_move"
+                    style="?attr/materialButtonOutlinedStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="Move"
+                    android:textColor="@color/edit_toolbar_button_text"
+                    android:textSize="12sp"
+                    app:strokeColor="#80FFFFFF" />
+
+                <Button
+                    android:id="@+id/btn_edit_resize"
+                    style="?attr/materialButtonOutlinedStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="Resize"
+                    android:textColor="@color/edit_toolbar_button_text"
+                    android:textSize="12sp"
+                    app:strokeColor="#80FFFFFF" />
+
+                <Button
+                    android:id="@+id/btn_edit_opacity"
+                    style="?attr/materialButtonOutlinedStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="Opacity"
+                    android:textColor="@color/edit_toolbar_button_text"
+                    android:textSize="12sp"
+                    app:strokeColor="#80FFFFFF" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <Button
+                android:id="@+id/btn_edit_reset"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:text="Reset"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                app:strokeColor="#80FFFFFF" />
+
+        </LinearLayout>
+
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/loading_indicator"
             style="?attr/materialCardViewOutlinedStyle"

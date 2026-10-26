@@ -41,7 +41,7 @@ class InputOverlayDrawableButton(
     defaultStateBitmap: Bitmap,
     pressedStateBitmap: Bitmap,
     val id: Int,
-    val opacity: Int
+    var opacity: Int
 ) {
     var trackId: Int
 
@@ -57,6 +57,17 @@ class InputOverlayDrawableButton(
     private val defaultStateBitmap: BitmapDrawable
     private val pressedStateBitmap: BitmapDrawable
     private var pressedState = false
+
+    // State of an edit-layout resize gesture.
+    private var resizeCenterX = 0
+    private var resizeCenterY = 0
+    private var resizeStartDist = 1
+    private var resizeStartWidth = 0
+    private var resizeStartHeight = 0
+
+    /** Current size relative to the size the drawable was created with (1.0 = unchanged). */
+    val resizeRatio: Float
+        get() = bounds.width().toFloat() / width
 
     init {
         this.defaultStateBitmap = BitmapDrawable(res, defaultStateBitmap)
@@ -149,7 +160,10 @@ class InputOverlayDrawableButton(
         overlay.hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
     }
 
-    fun onConfigureTouch(event: MotionEvent): Boolean {
+    fun onConfigureTouch(
+        event: MotionEvent,
+        action: InputOverlay.EditAction = InputOverlay.EditAction.MOVE
+    ): Boolean {
         val pointerIndex = event.actionIndex
         val fingerPositionX = event.getX(pointerIndex).toInt()
         val fingerPositionY = event.getY(pointerIndex).toInt()
@@ -157,17 +171,59 @@ class InputOverlayDrawableButton(
             MotionEvent.ACTION_DOWN -> {
                 previousTouchX = fingerPositionX
                 previousTouchY = fingerPositionY
+                resizeCenterX = bounds.centerX()
+                resizeCenterY = bounds.centerY()
+                resizeStartWidth = bounds.width()
+                resizeStartHeight = bounds.height()
+                resizeStartDist = maxOf(
+                    10,
+                    Math.hypot(
+                        (fingerPositionX - resizeCenterX).toDouble(),
+                        (fingerPositionY - resizeCenterY).toDouble()
+                    ).toInt()
+                )
             }
 
             MotionEvent.ACTION_MOVE -> {
-                controlPositionX += fingerPositionX - previousTouchX
-                controlPositionY += fingerPositionY - previousTouchY
-                setBounds(
-                    controlPositionX,
-                    controlPositionY,
-                    width + controlPositionX,
-                    height + controlPositionY
-                )
+                when (action) {
+                    InputOverlay.EditAction.MOVE -> {
+                        val currentWidth = bounds.width()
+                        val currentHeight = bounds.height()
+                        controlPositionX += fingerPositionX - previousTouchX
+                        controlPositionY += fingerPositionY - previousTouchY
+                        setBounds(
+                            controlPositionX,
+                            controlPositionY,
+                            controlPositionX + currentWidth,
+                            controlPositionY + currentHeight
+                        )
+                    }
+
+                    InputOverlay.EditAction.RESIZE -> {
+                        // Scale around the center, by how far the finger is from it.
+                        val dist = Math.hypot(
+                            (fingerPositionX - resizeCenterX).toDouble(),
+                            (fingerPositionY - resizeCenterY).toDouble()
+                        ).toFloat()
+                        val ratio = (dist / resizeStartDist).coerceIn(0.2f, 5.0f)
+                        val newWidth = (resizeStartWidth * ratio).toInt().coerceAtLeast(20)
+                        val newHeight = (resizeStartHeight * ratio).toInt().coerceAtLeast(20)
+                        controlPositionX = resizeCenterX - newWidth / 2
+                        controlPositionY = resizeCenterY - newHeight / 2
+                        setBounds(
+                            controlPositionX,
+                            controlPositionY,
+                            controlPositionX + newWidth,
+                            controlPositionY + newHeight
+                        )
+                    }
+
+                    InputOverlay.EditAction.OPACITY -> {
+                        // Drag up = more opaque, drag down = more transparent.
+                        val deltaY = previousTouchY - fingerPositionY
+                        opacity = (opacity + deltaY * 255 / 300).coerceIn(MIN_EDIT_OPACITY, 255)
+                    }
+                }
                 previousTouchX = fingerPositionX
                 previousTouchY = fingerPositionY
             }
@@ -202,4 +258,9 @@ class InputOverlayDrawableButton(
         }
     val bounds: Rect
         get() = defaultStateBitmap.bounds
+
+    companion object {
+        /** Lowest opacity reachable while editing, so the control never disappears. */
+        const val MIN_EDIT_OPACITY = 13
+    }
 }

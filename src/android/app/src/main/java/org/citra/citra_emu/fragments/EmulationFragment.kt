@@ -94,6 +94,7 @@ import org.citra.citra_emu.utils.Log
 import org.citra.citra_emu.utils.ViewUtils
 import org.citra.citra_emu.viewmodel.EmulationViewModel
 import org.citra.citra_emu.overlay.OverlayPrefs
+import org.citra.citra_emu.overlay.InputOverlay
 
 class EmulationFragment :
     Fragment(),
@@ -128,6 +129,13 @@ class EmulationFragment :
 
     // Only used if a game is passed through intent on google play variant
     private var gameFd: Int? = null
+
+    // State of the dragging of the edit layout toolbar
+    private var draggingEditToolbar = false
+    private var editToolbarTouchX = 0f
+    private var editToolbarTouchY = 0f
+    private var editToolbarStartX = 0f
+    private var editToolbarStartY = 0f
 
     override fun onAttach(context: Context) {
         super.onAttach(context)
@@ -223,7 +231,7 @@ class EmulationFragment :
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        _binding = FragmentEmulationBinding.inflate(inflater)
+        _binding = FragmentEmulationBinding.inflate(inflater)        
         binding.inGameMenu.menu.findItem(R.id.menu_secondary_screen_layout).isVisible =
             emulationActivity.secondaryDisplayManager.availableDisplays.isNotEmpty()
         binding.inGameMenu.menu.findItem(R.id.menu_landscape_screen_layout).isVisible =
@@ -243,10 +251,25 @@ class EmulationFragment :
             return
         }
 
-        binding.surfaceEmulation.holder.addCallback(this)
+        binding.editToolbar.setOnTouchListener { v, event -> onEditToolbarTouch(v, event) }
+		binding.surfaceEmulation.holder.addCallback(this)
         binding.doneControlConfig.setOnClickListener {
             binding.doneControlConfig.visibility = View.GONE
+            binding.editToolbar.visibility = View.GONE
             binding.surfaceInputOverlay.setIsInEditMode(false)
+        }
+        binding.editActionGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            binding.surfaceInputOverlay.setEditAction(
+                when (checkedId) {
+                    R.id.btn_edit_resize -> InputOverlay.EditAction.RESIZE
+                    R.id.btn_edit_opacity -> InputOverlay.EditAction.OPACITY
+                    else -> InputOverlay.EditAction.MOVE
+                }
+            )
+        }
+        binding.btnEditReset.setOnClickListener {
+            binding.surfaceInputOverlay.resetLayoutToDefault()
         }
 
         // Show/hide the "Stats" overlay
@@ -1318,17 +1341,94 @@ class EmulationFragment :
         popupMenu.show()
     }
 
+    /** Drag the toolbar by the handle (or any part that is not a button). */
+    private fun onEditToolbarTouch(toolbar: View, event: MotionEvent): Boolean {
+        val parent = toolbar.parent as? View ?: return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                draggingEditToolbar = true
+                editToolbarTouchX = event.rawX
+                editToolbarTouchY = event.rawY
+                editToolbarStartX = toolbar.x
+                editToolbarStartY = toolbar.y
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (!draggingEditToolbar) return false
+                moveEditToolbar(
+                    toolbar,
+                    parent,
+                    editToolbarStartX + event.rawX - editToolbarTouchX,
+                    editToolbarStartY + event.rawY - editToolbarTouchY
+                )
+                return true
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!draggingEditToolbar) return false
+                draggingEditToolbar = false
+                saveEditToolbarPosition(toolbar, parent)
+                return true
+            }
+        }
+        return false
+    }
+
+    /** Moves the toolbar and keeps it completely on the screen. */
+    private fun moveEditToolbar(toolbar: View, parent: View, x: Float, y: Float) {
+        val maxX = (parent.width - toolbar.width).coerceAtLeast(0).toFloat()
+        val maxY = (parent.height - toolbar.height).coerceAtLeast(0).toFloat()
+        toolbar.x = x.coerceIn(0f, maxX)
+        toolbar.y = y.coerceIn(0f, maxY)
+    }
+
+    private fun editToolbarOrientation(): String =
+        if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+            "_portrait"
+        } else {
+            "_landscape"
+        }
+
+    /** The position is stored as a fraction of the screen size. */
+    private fun saveEditToolbarPosition(toolbar: View, parent: View) {
+        if (parent.width <= 0 || parent.height <= 0) return
+        val suffix = editToolbarOrientation()
+        preferences.edit()
+            .putFloat("edit_toolbar${suffix}_X", (toolbar.x / parent.width).coerceIn(0f, 1f))
+            .putFloat("edit_toolbar${suffix}_Y", (toolbar.y / parent.height).coerceIn(0f, 1f))
+            .apply()
+    }
+
+    private fun restoreEditToolbarPosition() {
+        val toolbar = binding.editToolbar
+        val parent = toolbar.parent as? View ?: return
+        if (parent.width <= 0 || parent.height <= 0) return
+        val suffix = editToolbarOrientation()
+        val savedX = preferences.getFloat("edit_toolbar${suffix}_X", Float.NaN)
+        val savedY = preferences.getFloat("edit_toolbar${suffix}_Y", Float.NaN)
+        if (savedX.isNaN() || savedY.isNaN()) return
+        moveEditToolbar(toolbar, parent, savedX * parent.width, savedY * parent.height)
+    }
+
     private fun editControlsPlacement() {
         if (binding.surfaceInputOverlay.isInEditMode) {
             binding.doneControlConfig.visibility = View.GONE
+            binding.editToolbar.visibility = View.GONE
             binding.surfaceInputOverlay.setIsInEditMode(false)
         } else {
             binding.doneControlConfig.visibility = View.VISIBLE
+            binding.editToolbar.visibility = View.VISIBLE
+            binding.editToolbar.post { restoreEditToolbarPosition() }
+            binding.editActionGroup.check(R.id.btn_edit_move)
             binding.surfaceInputOverlay.setIsInEditMode(true)
         }
     }
 
+    private fun orientationSuffix(): String = if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) "-Portrait" else ""
+
     private fun showToggleControlsDialog() {
+        val orient = orientationSuffix()	
         val editor = overlayPrefs.edit()
         val enabledButtons = BooleanArray(18)
         enabledButtons.forEachIndexed { i: Int, _: Boolean ->
@@ -1338,7 +1438,12 @@ class EmulationFragment :
                 // TODO: Remove these magic numbers
                 6, 7, 12, 13, 14, 15, 16, 17 -> defaultValue = false
             }
-            enabledButtons[i] = overlayPrefs.getBoolean("buttonToggle$i", defaultValue)
+            val perOrientKey = "buttonToggle${i}$orient"
+            enabledButtons[i] = if (overlayPrefs.contains(perOrientKey)) {
+                overlayPrefs.getBoolean(perOrientKey, defaultValue)
+            } else {
+                overlayPrefs.getBoolean("buttonToggle$i", defaultValue)
+            }
         }
 
         val dialog = MaterialAlertDialogBuilder(requireContext())
@@ -1347,7 +1452,7 @@ class EmulationFragment :
                 R.array.n3dsButtons,
                 enabledButtons
             ) { _: DialogInterface?, indexSelected: Int, isChecked: Boolean ->
-                editor.putBoolean("buttonToggle$indexSelected", isChecked)
+                editor.putBoolean("buttonToggle${indexSelected}$orient", isChecked)
             }
             .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
                 editor.apply()
@@ -1368,6 +1473,8 @@ class EmulationFragment :
     }
 
     private fun showAdjustScaleDialog(target: String) {
+        val orient = orientationSuffix()
+        val perOrientTarget = target + orient
         val sliderBinding = DialogSliderBinding.inflate(layoutInflater)
 
         sliderBinding.apply {
@@ -1376,7 +1483,8 @@ class EmulationFragment :
             val sliderMax = 150
             slider.valueFrom = sliderMin.toFloat()
             slider.valueTo = sliderMax.toFloat()
-            slider.value = overlayPrefs.getInt(target, sliderStart)
+            val current = if (overlayPrefs.contains(perOrientTarget)) overlayPrefs.getInt(perOrientTarget, sliderStart) else overlayPrefs.getInt(target, sliderStart)
+            slider.value = current
                 .toFloat()
                 .coerceIn(slider.valueFrom..slider.valueTo)
             @SuppressLint("SetTextI18n")
@@ -1407,7 +1515,7 @@ class EmulationFragment :
                     ) {
                         textValue.setText((slider.value + sliderStart).toInt().toString())
                         textValue.setSelection(textValue.length())
-                        setControlScale(slider.value.toInt(), target)
+                        setControlScale(slider.value.toInt(), perOrientTarget)
                     }
                 }
             )
@@ -1419,24 +1527,27 @@ class EmulationFragment :
             .setTitle(R.string.emulation_control_scale)
             .setView(sliderBinding.root)
             .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int ->
-                setControlScale(previousProgress, target)
+                setControlScale(previousProgress, perOrientTarget)
             }
             .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
-                setControlScale(sliderBinding.slider.value.toInt(), target)
+                setControlScale(sliderBinding.slider.value.toInt(), perOrientTarget)
             }
             .setNeutralButton(R.string.slider_default) { _: DialogInterface?, _: Int ->
-                setControlScale(50, target)
+                setControlScale(50, perOrientTarget)
             }
             .show()
     }
 
     private fun showAdjustOpacityDialog() {
+        val orient = orientationSuffix()
+        val perOrientKey = "controlOpacity$orient"
         val sliderBinding = DialogSliderBinding.inflate(layoutInflater)
 
         sliderBinding.apply {
             slider.valueFrom = 0f
             slider.valueTo = 100f
-            slider.value = overlayPrefs.getInt("controlOpacity", 50).toFloat()
+            val cur = if (overlayPrefs.contains(perOrientKey)) overlayPrefs.getInt(perOrientKey, 50) else overlayPrefs.getInt("controlOpacity", 50)
+            slider.value = cur.toFloat()
             textValue.setText(slider.value.toInt().toString())
 
             textValue.addTextChangedListener(object : TextWatcher {
@@ -1465,21 +1576,21 @@ class EmulationFragment :
 
             textInput.suffixText = "%"
         }
-        val previousProgress = sliderBinding.slider.value.toInt()
-
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.emulation_control_opacity)
-            .setView(sliderBinding.root)
-            .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int ->
-                setControlOpacity(previousProgress)
-            }
-            .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
-                setControlOpacity(sliderBinding.slider.value.toInt())
-            }
-            .setNeutralButton(R.string.slider_default) { _: DialogInterface?, _: Int ->
-                setControlOpacity(50)
-            }
-            .show()
+		val previousProgress = sliderBinding.slider.value.toInt()
+		
+		MaterialAlertDialogBuilder(requireContext())
+			.setTitle(R.string.emulation_control_opacity)
+			.setView(sliderBinding.root)
+			.setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int ->
+				setControlOpacity(previousProgress, perOrientKey)
+			}
+			.setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
+				setControlOpacity(sliderBinding.slider.value.toInt(), perOrientKey)
+			}
+			.setNeutralButton(R.string.slider_default) { _: DialogInterface?, _: Int ->
+				setControlOpacity(50, perOrientKey)
+			}
+			.show()
     }
 
     private fun setControlScale(scale: Int, target: String) {
@@ -1496,34 +1607,43 @@ class EmulationFragment :
         ).apply()
     }
 
-    private fun resetAllScales() {
-        resetScale("controlScale")
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_A)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_B)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_X)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_Y)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.TRIGGER_L)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.TRIGGER_R)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_ZL)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_ZR)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_START)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_SELECT)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.DPAD)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.STICK_LEFT)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.STICK_C)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_HOME)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_SWAP)
-        resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_TURBO)
-        resetScale("controlScale-" + Hotkey.COMBO_BUTTON.button)
-        resetScale("controlScale-tatacon")
-        binding.surfaceInputOverlay.refreshControls()
-    }
+	private fun resetAllScales() {
+		val orient = orientationSuffix()
+		resetScale("controlScale$orient")
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_A + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_B + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_X + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_Y + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.TRIGGER_L + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.TRIGGER_R + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_ZL + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_ZR + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_START + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_SELECT + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.DPAD + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.STICK_LEFT + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.STICK_C + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_HOME + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_SWAP + orient)
+		resetScale("controlScale-" + NativeLibrary.ButtonType.BUTTON_TURBO + orient)
+		resetScale("controlScale-" + Hotkey.COMBO_BUTTON.button + orient)
+		resetScale("controlScale-tatacon$orient")
 
-    private fun setControlOpacity(opacity: Int) {
-        overlayPrefs.edit()
-            .putInt("controlOpacity", opacity)
-            .apply()
-        binding.surfaceInputOverlay.refreshControls()
+		// Reset aspect per orientation and clean up the legacy global key
+		overlayPrefs.edit()
+			.remove("controlAspect-tatacon$orient")
+			.remove("controlAspect-tatacon")
+			.remove("controlOpacity$orient")
+			.apply()
+
+		binding.surfaceInputOverlay.refreshControls()
+	}
+
+    private fun setControlOpacity(opacity: Int, target: String = "controlOpacity") {
+		overlayPrefs.edit()
+			.putInt(target, opacity)
+			.apply()
+		binding.surfaceInputOverlay.refreshControls()
     }
 
     private fun showResetOverlayDialog() {
@@ -1538,6 +1658,9 @@ class EmulationFragment :
 
     private fun resetInputOverlay() {
         resetAllScales()
+		val e = overlayPrefs.edit()
+		overlayPrefs.all.keys.filter { it.startsWith("controlOpacity-") }.forEach { e.remove(it) }
+		e.apply()
         overlayPrefs.edit()
             .putInt("controlOpacity", 50)
             .apply()

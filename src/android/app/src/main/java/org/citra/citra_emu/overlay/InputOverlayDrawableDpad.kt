@@ -37,7 +37,7 @@ class InputOverlayDrawableDpad(
     val downId: Int,
     val leftId: Int,
     val rightId: Int,
-    val opacity: Int
+    var opacity: Int
 ) {
     var trackId: Int
     private var previousTouchX = 0
@@ -53,6 +53,17 @@ class InputOverlayDrawableDpad(
     private var downButtonState = false
     private var leftButtonState = false
     private var rightButtonState = false
+
+    // State of an edit-layout resize gesture.
+    private var resizeCenterX = 0
+    private var resizeCenterY = 0
+    private var resizeStartDist = 1
+    private var resizeStartWidth = 0
+    private var resizeStartHeight = 0
+
+    /** Current size relative to the size the drawable was created with (1.0 = unchanged). */
+    val resizeRatio: Float
+        get() = bounds.width().toFloat() / width
 
     init {
         this.defaultStateBitmap = BitmapDrawable(res, defaultStateBitmap)
@@ -148,8 +159,8 @@ class InputOverlayDrawableDpad(
     }
 
     fun draw(canvas: Canvas) {
-        val px = controlPositionX + width / 2
-        val py = controlPositionY + height / 2
+        val px = bounds.centerX()
+        val py = bounds.centerY()
 
         // Pressed up
         if (upButtonState && !leftButtonState && !rightButtonState) {
@@ -255,7 +266,10 @@ class InputOverlayDrawableDpad(
             NativeLibrary.ButtonState.RELEASED
         }
 
-    fun onConfigureTouch(event: MotionEvent): Boolean {
+    fun onConfigureTouch(
+        event: MotionEvent,
+        action: InputOverlay.EditAction = InputOverlay.EditAction.MOVE
+    ): Boolean {
         val pointerIndex = event.actionIndex
         val fingerPositionX = event.getX(pointerIndex).toInt()
         val fingerPositionY = event.getY(pointerIndex).toInt()
@@ -263,17 +277,58 @@ class InputOverlayDrawableDpad(
             MotionEvent.ACTION_DOWN -> {
                 previousTouchX = fingerPositionX
                 previousTouchY = fingerPositionY
+                resizeCenterX = bounds.centerX()
+                resizeCenterY = bounds.centerY()
+                resizeStartWidth = bounds.width()
+                resizeStartHeight = bounds.height()
+                resizeStartDist = maxOf(
+                    10,
+                    Math.hypot(
+                        (fingerPositionX - resizeCenterX).toDouble(),
+                        (fingerPositionY - resizeCenterY).toDouble()
+                    ).toInt()
+                )
             }
 
             MotionEvent.ACTION_MOVE -> {
-                controlPositionX += fingerPositionX - previousTouchX
-                controlPositionY += fingerPositionY - previousTouchY
-                setBounds(
-                    controlPositionX,
-                    controlPositionY,
-                    width + controlPositionX,
-                    height + controlPositionY
-                )
+                when (action) {
+                    InputOverlay.EditAction.MOVE -> {
+                        val currentWidth = bounds.width()
+                        val currentHeight = bounds.height()
+                        controlPositionX += fingerPositionX - previousTouchX
+                        controlPositionY += fingerPositionY - previousTouchY
+                        setBounds(
+                            controlPositionX,
+                            controlPositionY,
+                            controlPositionX + currentWidth,
+                            controlPositionY + currentHeight
+                        )
+                    }
+
+                    InputOverlay.EditAction.RESIZE -> {
+                        val dist = Math.hypot(
+                            (fingerPositionX - resizeCenterX).toDouble(),
+                            (fingerPositionY - resizeCenterY).toDouble()
+                        ).toFloat()
+                        val ratio = (dist / resizeStartDist).coerceIn(0.2f, 5.0f)
+                        val newWidth = (resizeStartWidth * ratio).toInt().coerceAtLeast(40)
+                        val newHeight = (resizeStartHeight * ratio).toInt().coerceAtLeast(40)
+                        controlPositionX = resizeCenterX - newWidth / 2
+                        controlPositionY = resizeCenterY - newHeight / 2
+                        setBounds(
+                            controlPositionX,
+                            controlPositionY,
+                            controlPositionX + newWidth,
+                            controlPositionY + newHeight
+                        )
+                    }
+
+                    InputOverlay.EditAction.OPACITY -> {
+                        val deltaY = previousTouchY - fingerPositionY
+                        opacity = (opacity + deltaY * 255 / 300)
+                            .coerceIn(InputOverlayDrawableButton.MIN_EDIT_OPACITY, 255)
+                    }
+                }
                 previousTouchX = fingerPositionX
                 previousTouchY = fingerPositionY
             }

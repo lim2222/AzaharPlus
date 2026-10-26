@@ -39,9 +39,12 @@ class InputOverlayDrawableJoystick(
     rectOuter: Rect,
     rectInner: Rect,
     val joystickId: Int,
-    val opacity: Int
+    var opacity: Int
 ) {
     var trackId = -1
+
+    // Size of the outer circle when the drawable was created, to work out the resize ratio.
+    private val initialOuterWidth: Int = rectOuter.width()
     var xAxis = 0f
     var yAxis = 0f
     var angle = 0f
@@ -59,6 +62,19 @@ class InputOverlayDrawableJoystick(
     private val pressedStateInnerBitmap: BitmapDrawable
     private val boundsBoxBitmap: BitmapDrawable
     private var pressedState = false
+
+    // State of an edit-layout resize gesture.
+    private var resizeCenterX = 0
+    private var resizeCenterY = 0
+    private var resizeStartDist = 1
+    private var resizeStartWidth = 0
+    private var resizeStartHeight = 0
+    private var resizeStartInnerWidth = 0
+    private var resizeStartInnerHeight = 0
+
+    /** Current size relative to the size the drawable was created with (1.0 = unchanged). */
+    val resizeRatio: Float
+        get() = bounds.width().toFloat() / initialOuterWidth
 
     var bounds: Rect
         get() = outerBitmap.bounds
@@ -192,54 +208,90 @@ class InputOverlayDrawableJoystick(
         return false
     }
 
-    fun onConfigureTouch(event: MotionEvent): Boolean {
+    fun onConfigureTouch(
+        event: MotionEvent,
+        action: InputOverlay.EditAction = InputOverlay.EditAction.MOVE
+    ): Boolean {
         val pointerIndex = event.actionIndex
         val fingerPositionX = event.getX(pointerIndex).toInt()
         val fingerPositionY = event.getY(pointerIndex).toInt()
-        var scale = 1
-        if (joystickId == NativeLibrary.ButtonType.STICK_C) {
-            // C-stick is scaled down to be half the size of the circle pad
-            scale = 2
-        }
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 previousTouchX = fingerPositionX
                 previousTouchY = fingerPositionY
+                resizeCenterX = bounds.centerX()
+                resizeCenterY = bounds.centerY()
+                resizeStartWidth = bounds.width()
+                resizeStartHeight = bounds.height()
+                resizeStartInnerWidth = pressedStateInnerBitmap.bounds.width()
+                resizeStartInnerHeight = pressedStateInnerBitmap.bounds.height()
+                resizeStartDist = maxOf(
+                    10,
+                    Math.hypot(
+                        (fingerPositionX - resizeCenterX).toDouble(),
+                        (fingerPositionY - resizeCenterY).toDouble()
+                    ).toInt()
+                )
             }
 
             MotionEvent.ACTION_MOVE -> {
-                val deltaX = fingerPositionX - previousTouchX
-                val deltaY = fingerPositionY - previousTouchY
-                controlPositionX += deltaX
-                controlPositionY += deltaY
-                bounds = Rect(
-                    controlPositionX,
-                    controlPositionY,
-                    outerBitmap.intrinsicWidth / scale + controlPositionX,
-                    outerBitmap.intrinsicHeight / scale + controlPositionY
-                )
-                virtBounds = Rect(
-                    controlPositionX,
-                    controlPositionY,
-                    outerBitmap.intrinsicWidth / scale + controlPositionX,
-                    outerBitmap.intrinsicHeight / scale + controlPositionY
-                )
-                setInnerBounds()
-                setOrigBounds(
-                    Rect(
-                        Rect(
+                when (action) {
+                    InputOverlay.EditAction.MOVE -> {
+                        val deltaX = fingerPositionX - previousTouchX
+                        val deltaY = fingerPositionY - previousTouchY
+                        controlPositionX += deltaX
+                        controlPositionY += deltaY
+                        applyOuterBounds(
                             controlPositionX,
                             controlPositionY,
-                            outerBitmap.intrinsicWidth / scale + controlPositionX,
-                            outerBitmap.intrinsicHeight / scale + controlPositionY
+                            bounds.width(),
+                            bounds.height()
                         )
-                    )
-                )
+                    }
+
+                    InputOverlay.EditAction.RESIZE -> {
+                        val dist = Math.hypot(
+                            (fingerPositionX - resizeCenterX).toDouble(),
+                            (fingerPositionY - resizeCenterY).toDouble()
+                        ).toFloat()
+                        val ratio = (dist / resizeStartDist).coerceIn(0.2f, 5.0f)
+                        val newWidth = (resizeStartWidth * ratio).toInt().coerceAtLeast(40)
+                        val newHeight = (resizeStartHeight * ratio).toInt().coerceAtLeast(40)
+                        controlPositionX = resizeCenterX - newWidth / 2
+                        controlPositionY = resizeCenterY - newHeight / 2
+                        // The inner stick is scaled together with the outer circle.
+                        pressedStateInnerBitmap.bounds = Rect(
+                            0,
+                            0,
+                            (resizeStartInnerWidth * ratio).toInt().coerceAtLeast(10),
+                            (resizeStartInnerHeight * ratio).toInt().coerceAtLeast(10)
+                        )
+                        applyOuterBounds(controlPositionX, controlPositionY, newWidth, newHeight)
+                    }
+
+                    InputOverlay.EditAction.OPACITY -> {
+                        val deltaY = previousTouchY - fingerPositionY
+                        opacity = (opacity + deltaY * 255 / 300)
+                            .coerceIn(InputOverlayDrawableButton.MIN_EDIT_OPACITY, 255)
+                        outerBitmap.alpha = opacity
+                        defaultStateInnerBitmap.alpha = opacity
+                        pressedStateInnerBitmap.alpha = opacity
+                    }
+                }
                 previousTouchX = fingerPositionX
                 previousTouchY = fingerPositionY
             }
         }
         return true
+    }
+
+    /** Puts the outer circle (and everything derived from it) at the given place and size. */
+    private fun applyOuterBounds(left: Int, top: Int, width: Int, height: Int) {
+        bounds = Rect(left, top, left + width, top + height)
+        virtBounds = Rect(left, top, left + width, top + height)
+        boundsBoxBitmap.bounds = virtBounds
+        setInnerBounds()
+        setOrigBounds(Rect(left, top, left + width, top + height))
     }
 
     private fun setInnerBounds() {

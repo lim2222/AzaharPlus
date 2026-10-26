@@ -14,9 +14,6 @@ import android.view.MotionEvent
 import kotlin.math.max
 import kotlin.math.min
 
-/** Edit-layout action (kept self-contained so this file has no dependency on InputOverlay). */
-enum class TaTaConEditAction { MOVE, RESIZE, OPACITY }
-
 /**
  * Touch regions of the drum.
  *
@@ -122,46 +119,90 @@ class InputOverlayDrawableTaTaCon(
         controlPositionY = y
     }
 
+    // State of an edit-layout resize gesture.
+    private var resizeCenterX = 0
+    private var resizeCenterY = 0
+    private var resizeStartDist = 1
+    private var resizeStartWidth = 0
+    private var resizeStartHeight = 0
+    private var resizeStartFingerX = 0
+    private var resizeStartFingerY = 0
+
+    /** Current width relative to the width the drum was created with (1.0 = unchanged). */
+    val resizeRatio: Float
+        get() = bounds.width().toFloat() / width
+
+    /** Current height relative to the height the drum was created with (1.0 = unchanged). */
+    val resizeRatioY: Float
+        get() = bounds.height().toFloat() / height
+
     /** Edit-layout touch handler. [action] decides whether we MOVE, RESIZE or change OPACITY. */
-    fun onConfigureTouch(event: MotionEvent, action: TaTaConEditAction) {
+    fun onConfigureTouch(
+        event: MotionEvent,
+        action: InputOverlay.EditAction = InputOverlay.EditAction.MOVE
+    ) {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 previousTouchX = event.x.toInt()
                 previousTouchY = event.y.toInt()
+                resizeCenterX = bounds.centerX()
+                resizeCenterY = bounds.centerY()
+                resizeStartWidth = bounds.width()
+                resizeStartHeight = bounds.height()
+                resizeStartFingerX = event.x.toInt()
+                resizeStartFingerY = event.y.toInt()
+                resizeStartDist = maxOf(
+                    10,
+                    Math.hypot(
+                        (event.x - resizeCenterX).toDouble(),
+                        (event.y - resizeCenterY).toDouble()
+                    ).toInt()
+                )
             }
 
             MotionEvent.ACTION_MOVE -> {
-                val dx = event.x.toInt() - previousTouchX
-                val dy = event.y.toInt() - previousTouchY
+                val x = event.x.toInt()
+                val y = event.y.toInt()
                 when (action) {
-                    TaTaConEditAction.MOVE -> {
-                        controlPositionX += dx
-                        controlPositionY += dy
+                    InputOverlay.EditAction.MOVE -> {
+                        val currentWidth = bounds.width()
+                        val currentHeight = bounds.height()
+                        controlPositionX += x - previousTouchX
+                        controlPositionY += y - previousTouchY
                         setBounds(
                             controlPositionX,
                             controlPositionY,
-                            controlPositionX + bounds.width(),
-                            controlPositionY + bounds.height()
+                            controlPositionX + currentWidth,
+                            controlPositionY + currentHeight
                         )
                     }
-                    TaTaConEditAction.RESIZE -> {
-                        val newW = (bounds.width() + dx).coerceAtLeast(20)
-                        val aspect = intrinsicHeight.toFloat() / intrinsicWidth.toFloat()
-                        val newH = (newW * aspect).toInt().coerceAtLeast(20)
-                        val cx = bounds.centerX()
-                        val cy = bounds.centerY()
-                        setBounds(cx - newW / 2, cy - newH / 2, cx + newW / 2, cy + newH / 2)
-                        controlPositionX = bounds.left
-                        controlPositionY = bounds.top
-                        customScaleX = newW.toFloat() / intrinsicWidth
-                        customScaleY = newH.toFloat() / intrinsicHeight
+
+                    InputOverlay.EditAction.RESIZE -> {
+                        // Horizontal drag changes the width, vertical drag the height. The drum
+                        // grows around its center, so each edge follows the finger (hence the 2).
+                        val newWidth = (resizeStartWidth + 2 * (x - resizeStartFingerX))
+                            .coerceAtLeast(40)
+                            .coerceAtMost(resizeStartWidth * 5)
+                        val newHeight = (resizeStartHeight + 2 * (y - resizeStartFingerY))
+                            .coerceAtLeast(40)
+                            .coerceAtMost(resizeStartHeight * 5)
+                        controlPositionX = resizeCenterX - newWidth / 2
+                        controlPositionY = resizeCenterY - newHeight / 2
+                        setBounds(
+                            controlPositionX,
+                            controlPositionY,
+                            controlPositionX + newWidth,
+                            controlPositionY + newHeight
+                        )
                     }
-                    TaTaConEditAction.OPACITY -> {
-                        setCustomOpacity((_customOpacity + dx).coerceIn(0, 255))
+
+                    InputOverlay.EditAction.OPACITY -> {
+                        val deltaY = previousTouchY - y
+                        setCustomOpacity((_customOpacity + deltaY * 255 / 300).coerceIn(13, 255))
                     }
                 }
-                previousTouchX = event.x.toInt()
-                previousTouchY = event.y.toInt()
+                previousTouchX = x
+                previousTouchY = y
             }
         }
     }

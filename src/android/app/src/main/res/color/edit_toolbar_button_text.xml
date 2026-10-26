@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Text color of the edit layout toolbar buttons: white normally, dark when selected
+     (a selected button has a light background). -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="#FF1B1B1F" android:state_checked="true" />
+    <item android:color="#FFFFFFFF" />
+</selector>
