@@ -349,9 +349,9 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                     }
                     anyOverlayStateChanged = true
 
-                    // The overlay Home button is repurposed: it toggles the Taiko drum and is
-                    // not sent to the emulator.
-                    if (button.id == NativeLibrary.ButtonType.BUTTON_HOME) {
+                    // The Taiko hotkey only shows and hides the drum; like the other app hotkeys
+                    // it is not sent to the core.
+                    if (button.id == NativeLibrary.ButtonType.BUTTON_TAIKO) {
                         if (button.status == NativeLibrary.ButtonState.PRESSED) {
                             toggleTaTaCon()
                         }
@@ -836,7 +836,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     }
 
     /**
-     * Shows or hides the drum while the game is running (used by the Home overlay button).
+     * Shows or hides the drum while the game is running (used by the Taiko hotkey button).
      * Only the drum is rebuilt; the other controls are left alone, so this is safe to call
      * from inside onTouch. The state is saved so the toggle dialog stays in sync.
      */
@@ -1154,10 +1154,49 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 )
             )
         }
-        // Taiko drum. Toggle id 17 has no entry in the overlay options menu yet.
+        // Taiko drum, shown and hidden by the "Taiko Drum" entry of the toggle dialog.
         if (getBoolPerOrient("buttonToggle17", orientation, false)) {
             createTaTaCon(orientation)
         }
+
+        // The on-screen button that toggles the drum ("Taiko hotkey" entry of the dialog).
+        if (getBoolPerOrient("buttonToggle18", orientation, false)) {
+            ensureTaikoHotkeyPosition(orientation)
+            overlayButtons.add(
+                initializeOverlayButton(
+                    context,
+                    R.drawable.taiko,
+                    R.drawable.taiko_pressed,
+                    NativeLibrary.ButtonType.BUTTON_TAIKO,
+                    orientation
+                )
+            )
+        }
+    }
+
+    /**
+     * Writes the default position of the Taiko hotkey the first time it is shown. A button that
+     * was never placed has no position key and would otherwise start in the top left corner.
+     */
+    private fun ensureTaikoHotkeyPosition(orientation: String) {
+        val xKey = NativeLibrary.ButtonType.BUTTON_TAIKO.toString() + orientation + "-X"
+        val yKey = NativeLibrary.ButtonType.BUTTON_TAIKO.toString() + orientation + "-Y"
+        if (preferences.contains(xKey) || preferences.contains(yKey)) return
+        val xRes = if (orientation.isEmpty()) {
+            R.integer.N3DS_BUTTON_TAIKO_X
+        } else {
+            R.integer.N3DS_BUTTON_TAIKO_PORTRAIT_X
+        }
+        val yRes = if (orientation.isEmpty()) {
+            R.integer.N3DS_BUTTON_TAIKO_Y
+        } else {
+            R.integer.N3DS_BUTTON_TAIKO_PORTRAIT_Y
+        }
+        val metrics = resources.displayMetrics
+        preferences.edit()
+            .putFloat(xKey, resources.getInteger(xRes).toFloat() / 1000 * metrics.widthPixels)
+            .putFloat(yKey, resources.getInteger(yRes).toFloat() / 1000 * metrics.heightPixels)
+            .apply()
     }
 
     fun refreshControls() {
@@ -1388,6 +1427,14 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 resources.getInteger(R.integer.N3DS_BUTTON_HOME_Y).toFloat() / 1000 * maxY
             )
             .putFloat(
+                NativeLibrary.ButtonType.BUTTON_TAIKO.toString() + "-X",
+                resources.getInteger(R.integer.N3DS_BUTTON_TAIKO_X).toFloat() / 1000 * maxX
+            )
+            .putFloat(
+                NativeLibrary.ButtonType.BUTTON_TAIKO.toString() + "-Y",
+                resources.getInteger(R.integer.N3DS_BUTTON_TAIKO_Y).toFloat() / 1000 * maxY
+            )
+            .putFloat(
                 NativeLibrary.ButtonType.STICK_C.toString() + "-X",
                 resources.getInteger(R.integer.N3DS_STICK_C_X).toFloat() / 1000 * maxX
             )
@@ -1564,6 +1611,14 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             .putFloat(
                 NativeLibrary.ButtonType.BUTTON_HOME.toString() + portrait + "-Y",
                 resources.getInteger(R.integer.N3DS_BUTTON_HOME_PORTRAIT_Y).toFloat() / 1000 * maxY
+            )
+            .putFloat(
+                NativeLibrary.ButtonType.BUTTON_TAIKO.toString() + portrait + "-X",
+                resources.getInteger(R.integer.N3DS_BUTTON_TAIKO_PORTRAIT_X).toFloat() / 1000 * maxX
+            )
+            .putFloat(
+                NativeLibrary.ButtonType.BUTTON_TAIKO.toString() + portrait + "-Y",
+                resources.getInteger(R.integer.N3DS_BUTTON_TAIKO_PORTRAIT_Y).toFloat() / 1000 * maxY
             )
             .putFloat(
                 NativeLibrary.ButtonType.STICK_C.toString() + portrait + "-X",
@@ -1768,7 +1823,8 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 NativeLibrary.ButtonType.BUTTON_SELECT,
                 NativeLibrary.ButtonType.BUTTON_SWAP -> 0.08f
 
-                NativeLibrary.ButtonType.BUTTON_TURBO -> 0.10f
+                NativeLibrary.ButtonType.BUTTON_TURBO,
+                NativeLibrary.ButtonType.BUTTON_TAIKO -> 0.10f
 
                 NativeLibrary.ButtonType.TRIGGER_L,
                 NativeLibrary.ButtonType.TRIGGER_R,

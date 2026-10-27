@@ -191,6 +191,7 @@
         <item>@string/button_turbo</item>
         <item>@string/button_combo</item>
 		<item>Taiko Drum</item>
+        <item>Taiko hotkey</item>
     </string-array>
 
     <string-array name="comboOptions">

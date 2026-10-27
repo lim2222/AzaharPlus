@@ -2163,13 +2163,13 @@ class EmulationFragment :
     private fun showToggleControlsDialog() {
         val orient = orientationSuffix()	
         val editor = overlayPrefs.edit()
-        val enabledButtons = BooleanArray(18)
+        val enabledButtons = BooleanArray(19)
         enabledButtons.forEachIndexed { i: Int, _: Boolean ->
             // Buttons that are disabled by default
             var defaultValue = true
             when (i) {
                 // TODO: Remove these magic numbers
-                6, 7, 12, 13, 14, 15, 16, 17 -> defaultValue = false
+                6, 7, 12, 13, 14, 15, 16, 17, 18 -> defaultValue = false
             }
             val perOrientKey = "buttonToggle${i}$orient"
             enabledButtons[i] = if (overlayPrefs.contains(perOrientKey)) {
@@ -2400,10 +2400,10 @@ class EmulationFragment :
 
         val editor = overlayPrefs.edit()
         // TODO: This code sucks balls. We need to do this differently. -OS
-        for (i in 0 until 18) {
+        for (i in 0 until 19) {
             var defaultValue = true
             when (i) {
-                6, 7, 12, 13, 14, 15, 16, 17 -> defaultValue = false
+                6, 7, 12, 13, 14, 15, 16, 17, 18 -> defaultValue = false
             }
             editor.putBoolean("buttonToggle$i", defaultValue)
         }
