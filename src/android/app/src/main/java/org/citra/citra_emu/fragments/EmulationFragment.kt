@@ -468,6 +468,7 @@ class EmulationFragment :
             updateBackground()
         }
         binding.btnEditBg.setOnClickListener { openBackgroundPicker() }
+        binding.btnEditBgRemove.setOnClickListener { removeBackground() }
         binding.surfaceInputOverlay.screenEditListener = screenEditListener
         // Paint the wallpaper from the input overlay: it is drawn above the emulation surface,
         // while the background view itself can end up behind it and never show.
@@ -1892,6 +1893,11 @@ class EmulationFragment :
                     }
                     return@launch
                 }
+                if (savedBackgroundUri() != text) {
+                    // The image was replaced or removed while it was being read.
+                    Log.info("[BG] dropping $text, it is not the image of this orientation anymore")
+                    return@launch
+                }
                 binding.backgroundImage.setBitmap(bitmap)
                 shownBackgroundUri = text
                 Log.info(
@@ -1996,13 +2002,19 @@ class EmulationFragment :
     /**
      * The image to show in this orientation: its own one, then the one of the other orientation
      * (so a single image still shows everywhere), then the key used before images were split.
+     *
+     * An empty value means the image was removed in this orientation, which must not fall back to
+     * another one: the removal would otherwise bring the image of the other orientation back.
      */
     private fun savedBackgroundUri(): String? {
         val suffix = editToolbarOrientation()
         val other = if (suffix == "_portrait") "_landscape" else "_portrait"
-        return overlayPrefs.getString("bgUri$suffix", null)
-            ?: overlayPrefs.getString("bgUri$other", null)
-            ?: overlayPrefs.getString("bgUri", null)
+        val own = overlayPrefs.getString("bgUri$suffix", null)
+        if (own != null) return if (own.isEmpty()) null else own
+        val others = overlayPrefs.getString("bgUri$other", null)
+        if (others != null && others.isNotEmpty()) return others
+        val legacy = overlayPrefs.getString("bgUri", null)
+        return if (legacy.isNullOrEmpty()) null else legacy
     }
 
     private fun restoreBackground() {
@@ -2010,6 +2022,24 @@ class EmulationFragment :
         Log.info("[BG] restore uri=$saved key=" + backgroundUriKey())
         if (saved == null) return
         loadBackground(Uri.parse(saved))
+    }
+
+    /**
+     * Drops the background image of this game in the current orientation, so the image goes away
+     * right now. The key is emptied instead of being removed, because an image stored for the
+     * other orientation would otherwise be picked up again by the fallback in
+     * [savedBackgroundUri] and stay on screen. The other orientation, if it has an image of its
+     * own, keeps it.
+     */
+    private fun removeBackground() {
+        val key = backgroundUriKey()
+        overlayPrefs.edit().putString(key, "").apply()
+        // A read that is still running must not put the image back once it finishes.
+        shownBackgroundUri = null
+        loadingBackgroundUri = null
+        _binding?.backgroundImage?.setBitmap(null)
+        updateBackground()
+        Log.info("[BG] image removed for $key")
     }
 
     /**

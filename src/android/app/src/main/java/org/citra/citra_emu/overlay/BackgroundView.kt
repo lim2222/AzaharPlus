@@ -19,9 +19,10 @@ import kotlin.math.max
  * the 3DS screens are. The renderer's surface is opaque, so instead of showing the image through
  * it, the image is drawn everywhere except on the screen rectangles.
  *
- * The image always covers the whole view: the user transform can only zoom in and pan inside the
- * image, so it can never end up pushed off screen (or shrunk into a screen hole) where it would
- * look like the background was removed.
+ * The image covers the whole view at the default scale. The user transform can zoom it in, zoom it
+ * out below that size (the parts of the window that the image does not reach are simply left to the
+ * game) and pan it, but never far enough to push it off screen, where it would look like the
+ * background was removed.
  *
  * The view does not handle touches; the input overlay above it does.
  */
@@ -96,23 +97,35 @@ class BackgroundView(context: Context, attrs: AttributeSet?) : View(context, att
     }
 
     /**
-     * Keeps the image covering the view: the scale stays in [1, MAX_SCALE] and the offsets stay
-     * within the part of the image that hangs over the view, so no empty space can be shown and
-     * the image cannot be dragged out of sight.
+     * Keeps the image reachable: the scale stays in [MIN_SCALE, MAX_SCALE], and the offsets stay in
+     * the part of the image that hangs over the view (or in the view itself while the image is
+     * smaller than it), so the image cannot be dragged out of sight.
      */
     private fun clampTransform() {
         val b = bitmap ?: return
         if (b.width <= 0 || b.height <= 0) return
-        // Zooming out below the cover size would leave empty space around the image.
-        scaleX2 = scaleX2.coerceIn(1f, MAX_SCALE)
-        scaleY2 = scaleY2.coerceIn(1f, MAX_SCALE)
+        // Zooming out is allowed as far as MIN_SCALE, so the image can be made smaller than the
+        // window it is drawn in.
+        scaleX2 = scaleX2.coerceIn(MIN_SCALE, MAX_SCALE)
+        scaleY2 = scaleY2.coerceIn(MIN_SCALE, MAX_SCALE)
         if (width <= 0 || height <= 0) return
         val cover = max(width / b.width.toFloat(), height / b.height.toFloat())
-        val maxTx = max(0f, (b.width * cover * scaleX2 - width) / 2f)
-        val maxTy = max(0f, (b.height * cover * scaleY2 - height) / 2f)
+        // While the image is bigger than the view it has to keep covering it, so it can only move
+        // by the part that hangs over the edge. A smaller image is placed freely inside the view
+        // instead.
+        val maxTx = movableRange(b.width * cover * scaleX2, width.toFloat())
+        val maxTy = movableRange(b.height * cover * scaleY2, height.toFloat())
         translateX = translateX.coerceIn(-maxTx, maxTx)
         translateY = translateY.coerceIn(-maxTy, maxTy)
     }
+
+    /** How far the image may be moved on one axis. */
+    private fun movableRange(drawnSize: Float, viewSize: Float): Float =
+        if (drawnSize >= viewSize) {
+            (drawnSize - viewSize) / 2f
+        } else {
+            (viewSize - drawnSize) / 2f
+        }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -221,6 +234,7 @@ class BackgroundView(context: Context, attrs: AttributeSet?) : View(context, att
     }
 
     companion object {
+        private const val MIN_SCALE = 0.1f
         private const val MAX_SCALE = 10f
     }
 }

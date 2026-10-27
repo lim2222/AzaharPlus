@@ -49,11 +49,11 @@
             android:text="@string/emulation_done"
             android:visibility="gone" />
 
-        <!-- Edit layout toolbar: Move / Resize / Opacity / S-Move / S-Size / B-Move / B-Size,
-             plus the background image picker and reset. The buttons are split over two rows so
-             they all fit on screen without horizontal scrolling. It can be dragged by its handle
-             (or any part that is not a button) to get it out of the way of the controls that are
-             being edited. -->
+        <!-- Edit layout toolbar: Move / Resize / Opacity / S-Move / S-Size / B-Move / B-Size
+             and B-Remove, plus the background image picker and reset. The buttons are split
+             over two rows so they all fit on screen without horizontal scrolling. It can be
+             dragged by its handle (or any part that is not a button) to get it out of the way
+             of the controls that are being edited. -->
         <LinearLayout
             android:id="@+id/edit_toolbar"
             android:layout_width="wrap_content"
@@ -184,81 +184,106 @@
                         app:strokeColor="#80FFFFFF" />
                 </LinearLayout>
 
-                <!-- Row 2: 3DS screen and background transforms (need the custom layout) -->
-                <com.google.android.material.button.MaterialButtonToggleGroup
-                    android:id="@+id/edit_screen_group"
+                <!-- Row 2: 3DS screen and background transforms (need the custom layout).
+                     B-Remove is an action and stays outside of the toggle group. -->
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    app:selectionRequired="false"
-                    app:singleSelection="true">
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-                        <Button
-                            android:id="@+id/btn_edit_smove"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            android:minWidth="0dp"
-                            android:minHeight="0dp"
-                            android:paddingStart="8dp"
-                            android:paddingEnd="8dp"
-                            android:text="S-Move"
-                            android:textColor="@color/edit_toolbar_button_text"
-                            android:textSize="12sp"
-                            app:strokeColor="#80FFFFFF" />
+                    <com.google.android.material.button.MaterialButtonToggleGroup
+                        android:id="@+id/edit_screen_group"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        app:selectionRequired="false"
+                        app:singleSelection="true">
 
-                        <Button
-                            android:id="@+id/btn_edit_ssize"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            android:minWidth="0dp"
-                            android:minHeight="0dp"
-                            android:paddingStart="8dp"
-                            android:paddingEnd="8dp"
-                            android:text="S-Size"
-                            android:textColor="@color/edit_toolbar_button_text"
-                            android:textSize="12sp"
-                            app:strokeColor="#80FFFFFF" />
+                            <Button
+                                android:id="@+id/btn_edit_smove"
+                                style="?attr/materialButtonOutlinedStyle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingEnd="8dp"
+                                android:text="S-Move"
+                                android:textColor="@color/edit_toolbar_button_text"
+                                android:textSize="12sp"
+                                app:strokeColor="#80FFFFFF" />
+
+                            <Button
+                                android:id="@+id/btn_edit_ssize"
+                                style="?attr/materialButtonOutlinedStyle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingEnd="8dp"
+                                android:text="S-Size"
+                                android:textColor="@color/edit_toolbar_button_text"
+                                android:textSize="12sp"
+                                app:strokeColor="#80FFFFFF" />
 
 
-                        <Button
-                            android:id="@+id/btn_edit_bg_move"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            android:minWidth="0dp"
-                            android:minHeight="0dp"
-                            android:paddingStart="8dp"
-                            android:paddingEnd="8dp"
-                            android:text="B-Move"
-                            android:textColor="@color/edit_toolbar_button_text"
-                            android:textSize="12sp"
-                            app:strokeColor="#80FFFFFF" />
+                            <Button
+                                android:id="@+id/btn_edit_bg_move"
+                                style="?attr/materialButtonOutlinedStyle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingEnd="8dp"
+                                android:text="B-Move"
+                                android:textColor="@color/edit_toolbar_button_text"
+                                android:textSize="12sp"
+                                app:strokeColor="#80FFFFFF" />
 
-                        <Button
-                            android:id="@+id/btn_edit_bg_size"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            android:minWidth="0dp"
-                            android:minHeight="0dp"
-                            android:paddingStart="8dp"
-                            android:paddingEnd="8dp"
-                            android:text="B-Size"
-                            android:textColor="@color/edit_toolbar_button_text"
-                            android:textSize="12sp"
-                            app:strokeColor="#80FFFFFF" />
+                            <Button
+                                android:id="@+id/btn_edit_bg_size"
+                                style="?attr/materialButtonOutlinedStyle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingEnd="8dp"
+                                android:text="B-Size"
+                                android:textColor="@color/edit_toolbar_button_text"
+                                android:textSize="12sp"
+                                app:strokeColor="#80FFFFFF" />
 
-                    </com.google.android.material.button.MaterialButtonToggleGroup>
+                        </com.google.android.material.button.MaterialButtonToggleGroup>
+
+                    <Button
+                        android:id="@+id/btn_edit_bg_remove"
+                        style="?attr/materialButtonOutlinedStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginStart="6dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="B-Remove"
+                        android:textColor="#FFFFFF"
+                        android:textSize="12sp"
+                        app:strokeColor="#80FFFFFF" />
+                </LinearLayout>
             </LinearLayout>
 
         </LinearLayout>
