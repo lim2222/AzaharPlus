@@ -11,6 +11,8 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.drawable.VectorDrawable
 import android.os.Build
@@ -55,6 +57,102 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
     fun setEditAction(action: EditAction) {
         editAction = action
+    }
+
+    /**
+     * Edit modes that do not work on the controls: they move/resize the 3DS screens (custom
+     * layout) or the background image. The drags are reported to [screenEditListener].
+     */
+    enum class ScreenEditMode { NONE, SCREEN_MOVE, SCREEN_SIZE, BG_MOVE, BG_SIZE }
+
+    interface ScreenEditListener {
+        /** A drag started at ([x], [y]), in view pixels. */
+        fun onEditDragStart(mode: ScreenEditMode, x: Float, y: Float)
+
+        /** The finger moved by ([dx], [dy]) pixels since the last call. */
+        fun onEditDrag(mode: ScreenEditMode, dx: Float, dy: Float)
+
+        fun onEditDragEnd(mode: ScreenEditMode)
+    }
+
+    var screenEditMode: ScreenEditMode = ScreenEditMode.NONE
+        private set
+    var screenEditListener: ScreenEditListener? = null
+
+    private var screenEditActive = false
+    private var screenEditLastX = 0f
+    private var screenEditLastY = 0f
+
+    // Outlines of the 3DS screens drawn while they are being moved or resized.
+    private var screenOutlines: List<Rect> = emptyList()
+    private var selectedOutline = -1
+    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+    }
+    private val outlineLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 36f
+    }
+
+    fun setScreenEditMode(mode: ScreenEditMode) {
+        screenEditMode = mode
+        screenEditActive = false
+        if (mode != ScreenEditMode.SCREEN_MOVE && mode != ScreenEditMode.SCREEN_SIZE) {
+            screenOutlines = emptyList()
+            selectedOutline = -1
+        }
+        invalidate()
+    }
+
+    /** [rects]: top screen first, bottom screen second. [selected] is -1 when none is picked. */
+    fun setScreenOutlines(rects: List<Rect>, selected: Int) {
+        screenOutlines = rects.map { Rect(it) }
+        selectedOutline = selected
+        invalidate()
+    }
+
+    private fun drawScreenOutlines(canvas: Canvas) {
+        screenOutlines.forEachIndexed { index, rect ->
+            val selected = index == selectedOutline
+            val color = if (selected) Color.YELLOW else Color.WHITE
+            outlinePaint.color = color
+            outlineLabelPaint.color = color
+            canvas.drawRect(rect, outlinePaint)
+            canvas.drawText(
+                if (index == 0) "Top" else "Bottom",
+                rect.left + 12f,
+                rect.top + 44f,
+                outlineLabelPaint
+            )
+        }
+    }
+
+    /** Touch handling of the screen / background edit modes: one finger, reported as drags. */
+    private fun handleScreenEditTouch(event: MotionEvent): Boolean {
+        val listener = screenEditListener ?: return true
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                screenEditActive = true
+                screenEditLastX = event.x
+                screenEditLastY = event.y
+                listener.onEditDragStart(screenEditMode, event.x, event.y)
+            }
+
+            MotionEvent.ACTION_MOVE -> if (screenEditActive) {
+                val dx = event.x - screenEditLastX
+                val dy = event.y - screenEditLastY
+                screenEditLastX = event.x
+                screenEditLastY = event.y
+                listener.onEditDrag(screenEditMode, dx, dy)
+            }
+
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> if (screenEditActive) {
+                screenEditActive = false
+                listener.onEditDragEnd(screenEditMode)
+            }
+        }
+        return true
     }
 
     private val overlayButtons: MutableSet<InputOverlayDrawableButton> = HashSet()
@@ -109,12 +207,26 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         requestFocus()
     }
 
+    /**
+     * Background image painted under the controls. The emulation surface is opaque and covers the
+     * window behind it, so a plain view below it is never visible; this overlay is drawn above the
+     * surface, which is why the wallpaper has to be painted from here.
+     */
+    var backgroundRenderer: BackgroundView? = null
+
     override fun draw(canvas: Canvas) {
         super.draw(canvas)
+        backgroundRenderer?.drawBackground(canvas)
         overlayButtons.forEach { it.draw(canvas) }
         overlayDpads.forEach { it.draw(canvas) }
         overlayJoysticks.forEach { it.draw(canvas) }
         overlayTaTaCon?.draw(canvas)
+        if (isInEditMode &&
+            (screenEditMode == ScreenEditMode.SCREEN_MOVE ||
+                screenEditMode == ScreenEditMode.SCREEN_SIZE)
+        ) {
+            drawScreenOutlines(canvas)
+        }
     }
 
     private fun swapScreen() {
@@ -374,6 +486,9 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     }
 
     fun onTouchWhileEditing(event: MotionEvent): Boolean {
+        if (screenEditMode != ScreenEditMode.NONE) {
+            return handleScreenEditTouch(event)
+        }
         val pointerIndex = event.actionIndex
         val fingerPositionX = event.getX(pointerIndex).toInt()
         val fingerPositionY = event.getY(pointerIndex).toInt()

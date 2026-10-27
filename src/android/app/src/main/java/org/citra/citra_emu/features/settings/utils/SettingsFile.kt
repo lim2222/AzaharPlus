@@ -145,13 +145,17 @@ object SettingsFile {
         }
     }
 
-    fun saveFile(fileName: String, setting: AbstractSetting) {
+// Saves several settings with ONE read/write of config.ini (the single-setting version
+// rewrites the whole file for every setting, which is too slow while dragging).
+    fun saveFile(fileName: String, settings: List<AbstractSetting>) {
         val ini = getSettingsFile(fileName)
         try {
             val context: Context = CitraApplication.appContext
             val inputStream = context.contentResolver.openInputStream(ini.uri)
             val writer = Wini(inputStream)
-            writer.put(setting.section, setting.key, setting.valueAsString)
+            for (setting in settings) {
+                writer.put(setting.section, setting.key, setting.valueAsString)
+            }
             inputStream!!.close()
             val outputStream = context.contentResolver.openOutputStream(ini.uri, "wt")
             writer.store(outputStream)

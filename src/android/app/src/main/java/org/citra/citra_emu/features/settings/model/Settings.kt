@@ -93,7 +93,7 @@ class Settings {
     }
 
     fun saveSetting(setting: AbstractSetting, filename: String) {
-        SettingsFile.saveFile(filename, setting)
+        SettingsFile.saveFile(filename, listOf(setting))
     }
 
     companion object {

@@ -80,6 +80,46 @@ class ScreenAdjustmentUtil(
         NativeLibrary.updateFramebuffer(NativeLibrary.isPortraitMode())
     }
 
+    /**
+     * Sets one screen of the custom layout (landscape or portrait set), saves it to config.ini
+     * and applies it to the running game. [top] picks the top or the bottom screen slot.
+     */
+    fun applyCustomScreenRect(
+        portrait: Boolean,
+        top: Boolean,
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int
+    ) {
+        val targets = when {
+            portrait && top -> listOf(
+                IntSetting.PORTRAIT_TOP_X, IntSetting.PORTRAIT_TOP_Y,
+                IntSetting.PORTRAIT_TOP_WIDTH, IntSetting.PORTRAIT_TOP_HEIGHT
+            )
+            portrait -> listOf(
+                IntSetting.PORTRAIT_BOTTOM_X, IntSetting.PORTRAIT_BOTTOM_Y,
+                IntSetting.PORTRAIT_BOTTOM_WIDTH, IntSetting.PORTRAIT_BOTTOM_HEIGHT
+            )
+            top -> listOf(
+                IntSetting.LANDSCAPE_TOP_X, IntSetting.LANDSCAPE_TOP_Y,
+                IntSetting.LANDSCAPE_TOP_WIDTH, IntSetting.LANDSCAPE_TOP_HEIGHT
+            )
+            else -> listOf(
+                IntSetting.LANDSCAPE_BOTTOM_X, IntSetting.LANDSCAPE_BOTTOM_Y,
+                IntSetting.LANDSCAPE_BOTTOM_WIDTH, IntSetting.LANDSCAPE_BOTTOM_HEIGHT
+            )
+        }
+        val values = intArrayOf(x, y, width, height)
+        targets.forEachIndexed { i, setting ->
+            // The settings are stored as unsigned 16 bit numbers.
+            setting.int = values[i].coerceIn(0, 65535)
+        }
+        SettingsFile.saveFile(SettingsFile.FILE_NAME_CONFIG, targets)
+        NativeLibrary.reloadSettings()
+        NativeLibrary.updateFramebuffer(NativeLibrary.isPortraitMode())
+    }
+
     fun changeSecondaryOrientation(layoutOption: Int) {
         IntSetting.SECONDARY_DISPLAY_LAYOUT.int = layoutOption
         settings.saveSetting(IntSetting.SECONDARY_DISPLAY_LAYOUT, SettingsFile.FILE_NAME_CONFIG)

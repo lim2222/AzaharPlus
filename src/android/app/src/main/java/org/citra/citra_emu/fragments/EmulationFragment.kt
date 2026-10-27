@@ -11,6 +11,9 @@ import android.content.Context
 import android.content.DialogInterface
 import android.content.DialogInterface.OnClickListener
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Rect
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.res.Configuration
@@ -18,6 +21,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
@@ -39,6 +43,7 @@ import android.widget.TextView
 import android.widget.Toast
 import android.widget.Toast.LENGTH_LONG
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.ViewCompat
@@ -59,7 +64,9 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.slider.Slider
 import java.io.File
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.citra.citra_emu.CitraApplication
 import org.citra.citra_emu.EmulationNavigationDirections
 import org.citra.citra_emu.NativeLibrary
@@ -132,10 +139,160 @@ class EmulationFragment :
 
     // State of the dragging of the edit layout toolbar
     private var draggingEditToolbar = false
+    // Guards the two toggle groups against reacting to each other's clearChecked() call.
+    private var syncingEditButtons = false
+    // True while the background image forces the custom layout, to stop updateBackground() from
+    // re-entering itself.
+    private var switchingToCustomLayout = false
+    // The background image that is on screen / being read, so a resume or a re-entry into the game
+    // only reloads when the saved image differs from the visible one.
+    private var shownBackgroundUri: String? = null
+    private var loadingBackgroundUri: String? = null
     private var editToolbarTouchX = 0f
     private var editToolbarTouchY = 0f
     private var editToolbarStartX = 0f
     private var editToolbarStartY = 0f
+
+    // Edit layout: screens (custom layout) and background image
+    private val screenEditHandler = Handler(Looper.getMainLooper())
+    private var screenPushPending = false
+    private var workRects: List<Rect> = emptyList() // 0 = top screen, 1 = bottom screen
+    private var selectedScreen = -1
+    private var screenAccumX = 0f
+    private var screenAccumY = 0f
+
+    private val pushScreenRunnable = Runnable {
+        screenPushPending = false
+        pushSelectedScreen()
+    }
+
+    // The picker has to be created while the fragment is constructed.
+    private val pickBackground =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+            if (uri == null) {
+                Log.info("[BG] picker cancelled")
+                return@registerForActivityResult
+            }
+            // A rotation can destroy the fragment view while the picker is open; the image is
+            // saved anyway and restoreBackground() / onResume() pick it up for the new view.
+            val ctx = context ?: CitraApplication.appContext
+            // Keep read access after a restart of the app.
+            try {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: SecurityException) {
+                // Not offered by the provider; the image still loads until the app is closed.
+                Log.info("[BG] no persistable permission: " + e.message)
+            }
+            // One image per orientation, like the scale, the opacity and the placement.
+            val key = backgroundUriKey()
+            overlayPrefs.edit().putString(key, uri.toString()).apply()
+            Log.info("[BG] picked uri=$uri key=$key")
+            loadBackground(uri)
+        }
+
+    private val screenEditListener = object : InputOverlay.ScreenEditListener {
+        override fun onEditDragStart(mode: InputOverlay.ScreenEditMode, x: Float, y: Float) {
+            screenAccumX = 0f
+            screenAccumY = 0f
+            when (mode) {
+                InputOverlay.ScreenEditMode.SCREEN_MOVE,
+                InputOverlay.ScreenEditMode.SCREEN_SIZE -> {
+                    workRects = customScreenRects()
+                    val px = x.toInt()
+                    val py = y.toInt()
+                    // The bottom screen is drawn last, so it wins where they overlap.
+                    selectedScreen = when {
+                        workRects[1].contains(px, py) -> 1
+                        workRects[0].contains(px, py) -> 0
+                        else -> -1
+                    }
+                    binding.surfaceInputOverlay.setScreenOutlines(workRects, selectedScreen)
+                }
+
+                InputOverlay.ScreenEditMode.BG_MOVE,
+                InputOverlay.ScreenEditMode.BG_SIZE ->
+                    if (!binding.backgroundImage.hasBitmap) {
+                        Toast.makeText(
+                            requireContext(),
+                            "Choose a background image with BG first",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+
+                InputOverlay.ScreenEditMode.NONE -> {}
+            }
+        }
+
+        override fun onEditDrag(mode: InputOverlay.ScreenEditMode, dx: Float, dy: Float) {
+            when (mode) {
+                InputOverlay.ScreenEditMode.SCREEN_MOVE,
+                InputOverlay.ScreenEditMode.SCREEN_SIZE -> {
+                    if (selectedScreen < 0) return
+                    screenAccumX += dx
+                    screenAccumY += dy
+                    val stepX = screenAccumX.toInt()
+                    val stepY = screenAccumY.toInt()
+                    if (stepX == 0 && stepY == 0) return
+                    screenAccumX -= stepX
+                    screenAccumY -= stepY
+
+                    val rect = workRects[selectedScreen]
+                    if (mode == InputOverlay.ScreenEditMode.SCREEN_MOVE) {
+                        // Horizontal drag = X, vertical drag = Y
+                        rect.offsetTo(
+                            (rect.left + stepX).coerceAtLeast(0),
+                            (rect.top + stepY).coerceAtLeast(0)
+                        )
+                    } else {
+                        // Horizontal drag = width, vertical drag = height; top left stays
+                        val newWidth = (rect.width() + stepX).coerceAtLeast(minScreenSizePx)
+                        val newHeight = (rect.height() + stepY).coerceAtLeast(minScreenSizePx)
+                        rect.set(rect.left, rect.top, rect.left + newWidth, rect.top + newHeight)
+                    }
+                    binding.surfaceInputOverlay.setScreenOutlines(workRects, selectedScreen)
+                    binding.backgroundImage.setHoles(workRects)
+                    scheduleScreenPush()
+                }
+
+                InputOverlay.ScreenEditMode.BG_MOVE ->
+                    binding.backgroundImage.moveBy(dx, dy)
+
+                InputOverlay.ScreenEditMode.BG_SIZE -> {
+                    val view = binding.backgroundImage
+                    if (view.width > 0 && view.height > 0) {
+                        // Dragging half the view doubles the size on that axis.
+                        view.scaleBy(
+                            (1f + dx / (view.width / 2f)).coerceAtLeast(0.1f),
+                            (1f + dy / (view.height / 2f)).coerceAtLeast(0.1f)
+                        )
+                    }
+                }
+
+                InputOverlay.ScreenEditMode.NONE -> {}
+            }
+        }
+
+        override fun onEditDragEnd(mode: InputOverlay.ScreenEditMode) {
+            when (mode) {
+                InputOverlay.ScreenEditMode.SCREEN_MOVE,
+                InputOverlay.ScreenEditMode.SCREEN_SIZE -> {
+                    // Final value: write it to config.ini and apply it.
+                    screenEditHandler.removeCallbacks(pushScreenRunnable)
+                    screenPushPending = false
+                    pushSelectedScreen()
+                    updateBackground()
+                }
+
+                InputOverlay.ScreenEditMode.BG_MOVE,
+                InputOverlay.ScreenEditMode.BG_SIZE -> saveBackgroundTransform()
+
+                InputOverlay.ScreenEditMode.NONE -> {}
+            }
+        }
+    }
 
     override fun onAttach(context: Context) {
         super.onAttach(context)
@@ -252,25 +409,51 @@ class EmulationFragment :
         }
 
         binding.editToolbar.setOnTouchListener { v, event -> onEditToolbarTouch(v, event) }
-		binding.surfaceEmulation.holder.addCallback(this)
+        binding.surfaceEmulation.holder.addCallback(this)
         binding.doneControlConfig.setOnClickListener {
             binding.doneControlConfig.visibility = View.GONE
             binding.editToolbar.visibility = View.GONE
+            // Back to the default mode so the next edit session starts with "Move".
+            resetEditMode()
             binding.surfaceInputOverlay.setIsInEditMode(false)
         }
         binding.editActionGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
-            if (!isChecked) return@addOnButtonCheckedListener
-            binding.surfaceInputOverlay.setEditAction(
-                when (checkedId) {
-                    R.id.btn_edit_resize -> InputOverlay.EditAction.RESIZE
-                    R.id.btn_edit_opacity -> InputOverlay.EditAction.OPACITY
-                    else -> InputOverlay.EditAction.MOVE
-                }
-            )
+            if (!isChecked || syncingEditButtons) return@addOnButtonCheckedListener
+            // Only one of the two groups may have a selection at a time.
+            syncingEditButtons = true
+            binding.editScreenGroup.clearChecked()
+            syncingEditButtons = false
+            applyEditMode(checkedId)
+        }
+        binding.editScreenGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked || syncingEditButtons) return@addOnButtonCheckedListener
+            syncingEditButtons = true
+            binding.editActionGroup.clearChecked()
+            syncingEditButtons = false
+            applyEditMode(checkedId)
         }
         binding.btnEditReset.setOnClickListener {
             binding.surfaceInputOverlay.resetLayoutToDefault()
+            // Bring the background image back to its default placement too, otherwise a
+            // background that was moved or zoomed out of sight could not be recovered.
+            binding.backgroundImage.resetTransform()
+            saveBackgroundTransform()
+            updateBackground()
         }
+        binding.btnEditBg.setOnClickListener { openBackgroundPicker() }
+        binding.surfaceInputOverlay.screenEditListener = screenEditListener
+        // Paint the wallpaper from the input overlay: it is drawn above the emulation surface,
+        // while the background view itself can end up behind it and never show.
+        binding.surfaceInputOverlay.backgroundRenderer = binding.backgroundImage
+        binding.backgroundImage.mirror = binding.surfaceInputOverlay
+        // Repaint the overlay when the image, its placement or the screens change.
+        binding.backgroundImage.addOnLayoutChangeListener { _, left, top, right, bottom, oLeft,
+            oTop, oRight, oBottom ->
+            if (right - left != oRight - oLeft || bottom - top != oBottom - oTop) {
+                updateBackground()
+            }
+        }
+        restoreBackground()
 
         // Show/hide the "Stats" overlay
         updateShowPerformanceOverlay()
@@ -541,6 +724,9 @@ class EmulationFragment :
                         if (started) {
                             ViewUtils.hideView(binding.loadingIndicator)
                             ViewUtils.showView(binding.surfaceInputOverlay)
+                            // The layout is per orientation and the orientation may have changed
+                            // while booting, so re-evaluate the background once the game is up.
+                            binding.backgroundImage.post { updateBackground() }
                             binding.inGameMenu.menu.findItem(R.id.menu_emulation_savestates)
                                 .setVisible(NativeLibrary.getSavestateInfo() != null)
                             binding.drawerLayout.setDrawerLockMode(
@@ -568,6 +754,9 @@ class EmulationFragment :
     override fun onResume() {
         super.onResume()
         Choreographer.getInstance().postFrameCallback(this)
+        // Returning from the image picker must always show the picked image, even when the
+        // pick callback ran too late for the view that launched it.
+        if (_binding != null) reloadBackgroundIfNeeded()
         if (NativeLibrary.isRunning()) {
             emulationState.unpause()
 
@@ -1085,7 +1274,7 @@ class EmulationFragment :
         popupMenu.menu.findItem(layoutOptionMenuItem).setChecked(true)
 
         popupMenu.setOnMenuItemClickListener {
-            when (it.itemId) {
+            val handled = when (it.itemId) {
                 R.id.menu_screen_layout_largescreen -> {
                     screenAdjustmentUtil.changeScreenOrientation(ScreenLayout.LARGE_SCREEN.int)
                     true
@@ -1123,6 +1312,10 @@ class EmulationFragment :
 
                 else -> true
             }
+            // A background image needs the custom layout; keep the user's choice here and just
+            // hide the image instead of overriding the layout they picked.
+            if (handled) updateBackground(ensureLayout = false)
+            handled
         }
 
         popupMenu.show()
@@ -1153,7 +1346,7 @@ class EmulationFragment :
         popupMenu.menu.findItem(layoutOptionMenuItem).setChecked(true)
 
         popupMenu.setOnMenuItemClickListener {
-            when (it.itemId) {
+            val handled = when (it.itemId) {
                 R.id.menu_portrait_layout_top_full -> {
                     screenAdjustmentUtil.changePortraitOrientation(
                         PortraitScreenLayout.TOP_FULL_WIDTH.int
@@ -1182,6 +1375,10 @@ class EmulationFragment :
 
                 else -> true
             }
+            // A background image needs the custom layout; keep the user's choice here and just
+            // hide the image instead of overriding the layout they picked.
+            if (handled) updateBackground(ensureLayout = false)
+            handled
         }
 
         popupMenu.show()
@@ -1341,6 +1538,49 @@ class EmulationFragment :
         popupMenu.show()
     }
 
+    /**
+     * Applies the edit mode selected in one of the two toolbar groups. [checkedId] is the id of
+     * the checked button; the control modes (Move/Resize/Opacity) drive [InputOverlay.EditAction]
+     * while the screen/background modes drive [InputOverlay.ScreenEditMode].
+     */
+    private fun applyEditMode(checkedId: Int) {
+        val overlay = binding.surfaceInputOverlay
+        val mode = when (checkedId) {
+            R.id.btn_edit_smove -> InputOverlay.ScreenEditMode.SCREEN_MOVE
+            R.id.btn_edit_ssize -> InputOverlay.ScreenEditMode.SCREEN_SIZE
+            R.id.btn_edit_bg_move -> InputOverlay.ScreenEditMode.BG_MOVE
+            R.id.btn_edit_bg_size -> InputOverlay.ScreenEditMode.BG_SIZE
+            else -> InputOverlay.ScreenEditMode.NONE
+        }
+        overlay.setScreenEditMode(mode)
+        if (mode == InputOverlay.ScreenEditMode.NONE) {
+            overlay.setEditAction(
+                when (checkedId) {
+                    R.id.btn_edit_resize -> InputOverlay.EditAction.RESIZE
+                    R.id.btn_edit_opacity -> InputOverlay.EditAction.OPACITY
+                    else -> InputOverlay.EditAction.MOVE
+                }
+            )
+        } else {
+            // The screens and the background need the custom layout.
+            ensureCustomLayout()
+            if (mode == InputOverlay.ScreenEditMode.SCREEN_MOVE ||
+                mode == InputOverlay.ScreenEditMode.SCREEN_SIZE
+            ) {
+                overlay.setScreenOutlines(customScreenRects(), -1)
+            }
+        }
+    }
+
+    /** Selects "Move" in the toolbar and drops the screen/background modes. */
+    private fun resetEditMode() {
+        syncingEditButtons = true
+        binding.editScreenGroup.clearChecked()
+        binding.editActionGroup.check(R.id.btn_edit_move)
+        syncingEditButtons = false
+        applyEditMode(R.id.btn_edit_move)
+    }
+
     /** Drag the toolbar by the handle (or any part that is not a button). */
     private fun onEditToolbarTouch(toolbar: View, event: MotionEvent): Boolean {
         val parent = toolbar.parent as? View ?: return false
@@ -1384,11 +1624,16 @@ class EmulationFragment :
     }
 
     private fun editToolbarOrientation(): String =
-        if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+        if (contextOrApp().resources.configuration.orientation ==
+            Configuration.ORIENTATION_PORTRAIT
+        ) {
             "_portrait"
         } else {
             "_landscape"
         }
+
+    /** The fragment context when attached, otherwise the application one (still correct). */
+    private fun contextOrApp(): Context = context ?: CitraApplication.appContext
 
     /** The position is stored as a fraction of the screen size. */
     private fun saveEditToolbarPosition(toolbar: View, parent: View) {
@@ -1411,16 +1656,372 @@ class EmulationFragment :
         moveEditToolbar(toolbar, parent, savedX * parent.width, savedY * parent.height)
     }
 
+    private val minScreenSizePx = 50
+
+    private fun scheduleScreenPush() {
+        if (screenPushPending) return
+        screenPushPending = true
+        // Writing config.ini and reloading it is not free, so the preview is limited to a
+        // few updates per second while dragging.
+        screenEditHandler.postDelayed(pushScreenRunnable, 120L)
+    }
+
+    /** Writes the selected screen to config.ini and applies it to the running game. */
+    private fun pushSelectedScreen() {
+        val index = selectedScreen
+        if (index < 0 || index >= workRects.size) return
+        val rect = workRects[index]
+        screenAdjustmentUtil.applyCustomScreenRect(
+            NativeLibrary.isPortraitMode(),
+            index == 0,
+            rect.left,
+            rect.top,
+            rect.width(),
+            rect.height()
+        )
+    }
+
+    /** The two screen rectangles of the custom layout, in view pixels (top, then bottom). */
+    private fun customScreenRects(): List<Rect> {
+        return if (NativeLibrary.isPortraitMode()) {
+            listOf(
+                Rect(
+                    IntSetting.PORTRAIT_TOP_X.int,
+                    IntSetting.PORTRAIT_TOP_Y.int,
+                    IntSetting.PORTRAIT_TOP_X.int + IntSetting.PORTRAIT_TOP_WIDTH.int,
+                    IntSetting.PORTRAIT_TOP_Y.int + IntSetting.PORTRAIT_TOP_HEIGHT.int
+                ),
+                Rect(
+                    IntSetting.PORTRAIT_BOTTOM_X.int,
+                    IntSetting.PORTRAIT_BOTTOM_Y.int,
+                    IntSetting.PORTRAIT_BOTTOM_X.int + IntSetting.PORTRAIT_BOTTOM_WIDTH.int,
+                    IntSetting.PORTRAIT_BOTTOM_Y.int + IntSetting.PORTRAIT_BOTTOM_HEIGHT.int
+                )
+            )
+        } else {
+            listOf(
+                Rect(
+                    IntSetting.LANDSCAPE_TOP_X.int,
+                    IntSetting.LANDSCAPE_TOP_Y.int,
+                    IntSetting.LANDSCAPE_TOP_X.int + IntSetting.LANDSCAPE_TOP_WIDTH.int,
+                    IntSetting.LANDSCAPE_TOP_Y.int + IntSetting.LANDSCAPE_TOP_HEIGHT.int
+                ),
+                Rect(
+                    IntSetting.LANDSCAPE_BOTTOM_X.int,
+                    IntSetting.LANDSCAPE_BOTTOM_Y.int,
+                    IntSetting.LANDSCAPE_BOTTOM_X.int + IntSetting.LANDSCAPE_BOTTOM_WIDTH.int,
+                    IntSetting.LANDSCAPE_BOTTOM_Y.int + IntSetting.LANDSCAPE_BOTTOM_HEIGHT.int
+                )
+            )
+        }
+    }
+
+    private fun isCustomLayout(): Boolean =
+        if (NativeLibrary.isPortraitMode()) {
+            IntSetting.PORTRAIT_SCREEN_LAYOUT.int == PortraitScreenLayout.CUSTOM_PORTRAIT_LAYOUT.int
+        } else {
+            IntSetting.SCREEN_LAYOUT.int == ScreenLayout.CUSTOM_LAYOUT.int
+        }
+
+    /** Moving/resizing the screens needs the custom layout, so switch to it when needed. */
+    private fun ensureCustomLayout() {
+        if (!changeToCustomLayout()) return
+        Toast.makeText(requireContext(), "Switched to the custom layout", Toast.LENGTH_SHORT).show()
+        updateBackground()
+    }
+
+    /**
+     * Switches the current orientation to the custom layout. Returns whether the setting changed;
+     * the caller is responsible for refreshing whatever depends on the screen rectangles.
+     */
+    private fun changeToCustomLayout(): Boolean {
+        if (isCustomLayout()) return false
+        if (NativeLibrary.isPortraitMode()) {
+            screenAdjustmentUtil.changePortraitOrientation(
+                PortraitScreenLayout.CUSTOM_PORTRAIT_LAYOUT.int
+            )
+        } else {
+            screenAdjustmentUtil.changeScreenOrientation(ScreenLayout.CUSTOM_LAYOUT.int)
+        }
+        return true
+    }
+
+    private fun openBackgroundPicker() {
+        pickBackground.launch(arrayOf("image/*"))
+    }
+
+    /** Reads the image on a background thread, scaled down so it cannot run out of memory. */
+    private fun loadBackground(uri: Uri, retry: Boolean = true) {
+        if (_binding == null) {
+            // No view right now (a rotation is in progress): the saved image is loaded by
+            // restoreBackground() / onResume() instead.
+            Log.info("[BG] no view yet for $uri")
+            return
+        }
+        val text = uri.toString()
+        // A load of the same image is already on its way (onViewCreated + onResume).
+        if (text == loadingBackgroundUri) return
+        loadingBackgroundUri = text
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val bitmap = withContext(Dispatchers.IO) { decodeScaledBitmap(uri, 2048) }
+                if (bitmap == null) {
+                    // Keep the saved image: a failed read (permissions, provider quirks) must not
+                    // wipe the choice, and the image that is already on screen stays there.
+                    Log.info("[BG] could not decode $uri (retry=$retry)")
+                    if (retry) {
+                        // Providers can be slow to hand the document out right after the picker
+                        // closes, so one retry is worth it. Only retry while this is still the
+                        // image saved for the current orientation.
+                        _binding?.root?.postDelayed(
+                            {
+                                if (_binding != null && savedBackgroundUri() == text) {
+                                    loadBackground(uri, false)
+                                }
+                            },
+                            600
+                        )
+                    } else if (isAdded) {
+                        Toast.makeText(
+                            requireContext(),
+                            "Could not load the background image",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    return@launch
+                }
+                binding.backgroundImage.setBitmap(bitmap)
+                shownBackgroundUri = text
+                Log.info(
+                    "[BG] bitmap loaded " + bitmap.width + "x" + bitmap.height +
+                        " key=" + backgroundUriKey() + " uri=$text"
+                )
+                updateBackground()
+            } finally {
+                if (loadingBackgroundUri == text) loadingBackgroundUri = null
+            }
+        }
+    }
+
+    /**
+     * Decodes the picked image. Several strategies are tried because content providers give
+     * unreliable streams for documents that were picked earlier: a plain stream, then a file
+     * descriptor, then the file on disk for the "external storage" provider.
+     */
+    private fun decodeScaledBitmap(uri: Uri, maxSide: Int): Bitmap? {
+        val context = CitraApplication.appContext
+        val resolver = context.contentResolver
+
+        try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                val options = BitmapFactory.Options().apply {
+                    inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSide)
+                }
+                resolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, options)
+                }?.let { return it }
+            }
+            Log.info("[BG] stream decode failed for $uri ($bounds)")
+        } catch (e: Exception) {
+            Log.info("[BG] stream decode failed for $uri: $e")
+        }
+
+        try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                BitmapFactory.decodeFileDescriptor(pfd.fileDescriptor, null, bounds)
+            }
+            if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                val options = BitmapFactory.Options().apply {
+                    inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSide)
+                }
+                resolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    BitmapFactory.decodeFileDescriptor(pfd.fileDescriptor, null, options)
+                }?.let { return it }
+            }
+            Log.info("[BG] descriptor decode failed for $uri ($bounds)")
+        } catch (e: Exception) {
+            Log.info("[BG] descriptor decode failed for $uri: $e")
+        }
+
+        val path = documentFilePath(uri)
+            ?: return null
+        Log.info("[BG] falling back to the file at $path")
+        try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSide)
+            }
+            return BitmapFactory.decodeFile(path, options)
+        } catch (e: Exception) {
+            Log.info("[BG] file decode failed for $path: $e")
+        }
+        return null
+    }
+
+    private fun sampleSize(width: Int, height: Int, maxSide: Int): Int {
+        var sample = 1
+        while (maxOf(width, height) / sample > maxSide) sample *= 2
+        return sample
+    }
+
+    /**
+     * Path on disk of a document picked from the "external storage" provider
+     * (content://com.android.externalstorage.documents/document/primary%3ADir%2Ffile.png).
+     * Used as a last resort when the provider refuses to open the picked document again.
+     */
+    private fun documentFilePath(uri: Uri): String? {
+        if (uri.authority != "com.android.externalstorage.documents") return null
+        val documentId = uri.lastPathSegment ?: return null
+        val parts = documentId.split(":", limit = 2)
+        if (parts.size != 2) return null
+        val relative = parts[1]
+        val root = Environment.getExternalStorageDirectory().path
+        return when (parts[0]) {
+            "primary" -> "$root/$relative"
+            "home" -> "$root/Documents/$relative"
+            else -> null
+        }
+    }
+
+    /** The background image is stored per orientation, with the old global key as fallback. */
+    private fun backgroundUriKey(): String = "bgUri" + editToolbarOrientation()
+
+    /**
+     * The image to show in this orientation: its own one, then the one of the other orientation
+     * (so a single image still shows everywhere), then the key used before images were split.
+     */
+    private fun savedBackgroundUri(): String? {
+        val suffix = editToolbarOrientation()
+        val other = if (suffix == "_portrait") "_landscape" else "_portrait"
+        return overlayPrefs.getString("bgUri$suffix", null)
+            ?: overlayPrefs.getString("bgUri$other", null)
+            ?: overlayPrefs.getString("bgUri", null)
+    }
+
+    private fun restoreBackground() {
+        val saved = savedBackgroundUri()
+        Log.info("[BG] restore uri=$saved key=" + backgroundUriKey())
+        if (saved == null) return
+        loadBackground(Uri.parse(saved))
+    }
+
+    /**
+     * Called whenever the fragment is resumed: coming back from the image picker, from another
+     * activity or from a rotation must always leave the image saved for this orientation on
+     * screen. The pick callback can be too late for the view that handled the pick (a rotation
+     * while the picker was open recreates it), so the state is checked again here.
+     */
+    private fun reloadBackgroundIfNeeded() {
+        val saved = savedBackgroundUri() ?: return
+        if (saved == shownBackgroundUri) return
+        Log.info("[BG] resume: loading $saved (shown=$shownBackgroundUri)")
+        loadBackground(Uri.parse(saved))
+    }
+
+    /**
+     * Shows the background (with holes for the screens) when there is an image, hides it otherwise.
+     * Call it whenever the image, the layout or the screen rectangles change.
+     *
+     * The holes are the rectangles of the custom layout, so the image only makes sense while that
+     * layout is active. The layout is configured per orientation, and starting a game can change
+     * the orientation, which used to make the image disappear; switch the current orientation to
+     * the custom layout instead so the image keeps showing. [ensureLayout] is false when the user
+     * just picked another layout from the menu: the choice is respected and the image is hidden.
+     */
+    private fun updateBackground(ensureLayout: Boolean = true) {
+        val view = _binding?.backgroundImage ?: return
+        if (!view.hasBitmap) {
+            Log.info("[BG] hidden: no image loaded")
+            view.visibility = View.GONE
+            return
+        }
+        if (!isCustomLayout()) {
+            // changeToCustomLayout() applies the setting and updates the framebuffer, which can
+            // call back into this method. The guard keeps that from recursing.
+            Log.info(
+                "[BG] not custom layout. portrait=" + NativeLibrary.isPortraitMode() +
+                    " screen layout=" + IntSetting.SCREEN_LAYOUT.int +
+                    " portrait layout=" + IntSetting.PORTRAIT_SCREEN_LAYOUT.int +
+                    " ensureLayout=" + ensureLayout + " switching=" + switchingToCustomLayout
+            )
+            if (ensureLayout && !switchingToCustomLayout) {
+                switchingToCustomLayout = true
+                try {
+                    if (changeToCustomLayout() && isAdded) {
+                        Toast.makeText(
+                            requireContext(),
+                            "Background image needs the custom layout, switched to it",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                } finally {
+                    switchingToCustomLayout = false
+                }
+            }
+            if (!isCustomLayout()) {
+                // Could not switch: hide the image instead of covering the game with it.
+                Log.info(
+                    "[BG] hidden: layout is not the custom one. " +
+                        "Portrait: " + NativeLibrary.isPortraitMode() +
+                        " screen layout: " + IntSetting.SCREEN_LAYOUT.int +
+                        " portrait layout: " + IntSetting.PORTRAIT_SCREEN_LAYOUT.int
+                )
+                view.visibility = View.GONE
+                return
+            }
+        }
+        val rects = customScreenRects()
+        view.setHoles(rects)
+        applyBackgroundTransform()
+        view.visibility = View.VISIBLE
+        Log.info(
+            "[BG] shown. img=" + view.bitmapWidth + "x" + view.bitmapHeight +
+                " view=" + view.width + "x" + view.height +
+                " portrait=" + NativeLibrary.isPortraitMode() +
+                " suffix=" + editToolbarOrientation() +
+                " t=" + view.translateX + "," + view.translateY +
+                " s=" + view.scaleX2 + "," + view.scaleY2 +
+                " holes=" + rects
+        )
+    }
+
+    private fun saveBackgroundTransform() {
+        val view = binding.backgroundImage
+        val suffix = editToolbarOrientation()
+        overlayPrefs.edit()
+            .putFloat("bgTx$suffix", view.translateX)
+            .putFloat("bgTy$suffix", view.translateY)
+            .putFloat("bgSx$suffix", view.scaleX2)
+            .putFloat("bgSy$suffix", view.scaleY2)
+            .apply()
+    }
+
+    private fun applyBackgroundTransform() {
+        val suffix = editToolbarOrientation()
+        val tx = overlayPrefs.getFloat("bgTx$suffix", 0f)
+        val ty = overlayPrefs.getFloat("bgTy$suffix", 0f)
+        val sx = overlayPrefs.getFloat("bgSx$suffix", 1f)
+        val sy = overlayPrefs.getFloat("bgSy$suffix", 1f)
+        Log.info("[BG] transform suffix=$suffix tx=$tx ty=$ty sx=$sx sy=$sy")
+        binding.backgroundImage.setTransform(tx, ty, sx, sy)
+    }
+
     private fun editControlsPlacement() {
         if (binding.surfaceInputOverlay.isInEditMode) {
             binding.doneControlConfig.visibility = View.GONE
             binding.editToolbar.visibility = View.GONE
+            resetEditMode()
             binding.surfaceInputOverlay.setIsInEditMode(false)
         } else {
             binding.doneControlConfig.visibility = View.VISIBLE
             binding.editToolbar.visibility = View.VISIBLE
             binding.editToolbar.post { restoreEditToolbarPosition() }
-            binding.editActionGroup.check(R.id.btn_edit_move)
+            resetEditMode()
             binding.surfaceInputOverlay.setIsInEditMode(true)
         }
     }
@@ -1834,6 +2435,7 @@ class EmulationFragment :
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         Log.debug("[EmulationFragment] Surface changed. Resolution: " + width + "x" + height)
         emulationState.newSurface(holder.surface)
+        _binding?.backgroundImage?.post { updateBackground() }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
