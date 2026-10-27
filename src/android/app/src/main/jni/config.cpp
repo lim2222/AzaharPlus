@@ -39,6 +39,49 @@ Config::Config() {
 
 Config::~Config() = default;
 
+Config::GameScreenRects Config::game_screen_rects;
+
+void Config::SetGameScreenRect(bool portrait, bool top, const ScreenRect& rect) {
+    game_screen_rects.set[portrait ? 1 : 0][top ? 0 : 1] = true;
+    game_screen_rects.rect[portrait ? 1 : 0][top ? 0 : 1] = rect;
+    ApplyGameScreenRects();
+}
+
+void Config::ClearGameScreenRects() {
+    game_screen_rects = {};
+}
+
+void Config::ApplyGameScreenRects() {
+    if (game_screen_rects.set[0][0]) {
+        const ScreenRect& rect = game_screen_rects.rect[0][0];
+        Settings::values.custom_top_x = rect[0];
+        Settings::values.custom_top_y = rect[1];
+        Settings::values.custom_top_width = rect[2];
+        Settings::values.custom_top_height = rect[3];
+    }
+    if (game_screen_rects.set[0][1]) {
+        const ScreenRect& rect = game_screen_rects.rect[0][1];
+        Settings::values.custom_bottom_x = rect[0];
+        Settings::values.custom_bottom_y = rect[1];
+        Settings::values.custom_bottom_width = rect[2];
+        Settings::values.custom_bottom_height = rect[3];
+    }
+    if (game_screen_rects.set[1][0]) {
+        const ScreenRect& rect = game_screen_rects.rect[1][0];
+        Settings::values.custom_portrait_top_x = rect[0];
+        Settings::values.custom_portrait_top_y = rect[1];
+        Settings::values.custom_portrait_top_width = rect[2];
+        Settings::values.custom_portrait_top_height = rect[3];
+    }
+    if (game_screen_rects.set[1][1]) {
+        const ScreenRect& rect = game_screen_rects.rect[1][1];
+        Settings::values.custom_portrait_bottom_x = rect[0];
+        Settings::values.custom_portrait_bottom_y = rect[1];
+        Settings::values.custom_portrait_bottom_width = rect[2];
+        Settings::values.custom_portrait_bottom_height = rect[3];
+    }
+}
+
 bool Config::LoadINI(const std::string& default_contents, bool retry) {
     const std::string& location = this->android_config_loc;
     if (android_config == nullptr || android_config->ParseError() < 0) {
@@ -350,4 +393,6 @@ void Config::Reload() {
     }
     LoadINI(DefaultINI::android_config_default_file_content);
     ReadValues();
+    // Reading config.ini reset the custom layout, so put the running game's screens back.
+    ApplyGameScreenRects();
 }

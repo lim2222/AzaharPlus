@@ -223,6 +223,27 @@ object NativeLibrary {
      */
     external fun swapScreens(swapScreens: Boolean, rotation: Int)
 
+    /**
+     * Saves one screen of the custom layout for the running game and applies it.
+     *
+     * The core keeps the rectangle for as long as the game runs, so reading config.ini again does
+     * not reset it to the global value. [portrait] picks the landscape or the portrait set, [top]
+     * the top or the bottom screen.
+     */
+    external fun setGameScreenRect(
+        portrait: Boolean,
+        top: Boolean,
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int
+    )
+
+    /**
+     * Drops the per game screen rectangles, so the global config.ini ones are used again.
+     */
+    external fun clearGameScreenRects()
+
     external fun initializeGpuDriver(
         hookLibDir: String?,
         customDriverDir: String?,

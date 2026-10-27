@@ -564,6 +564,27 @@ void Java_org_citra_citra_1emu_NativeLibrary_swapScreens([[maybe_unused]] JNIEnv
     Camera::NDK::g_rotation = rotation;
 }
 
+void Java_org_citra_citra_1emu_NativeLibrary_setGameScreenRect([[maybe_unused]] JNIEnv* env,
+                                                               [[maybe_unused]] jobject obj,
+                                                               jboolean portrait, jboolean top,
+                                                               jint x, jint y, jint width,
+                                                               jint height) {
+    const auto clamp = [](jint value) {
+        return static_cast<u16>(std::clamp<jint>(value, 0, 0xFFFF));
+    };
+    Config::SetGameScreenRect(portrait, top, {clamp(x), clamp(y), clamp(width), clamp(height)});
+
+    auto& system = Core::System::GetInstance();
+    if (system.IsPoweredOn()) {
+        system.GPU().Renderer().UpdateCurrentFramebufferLayout(AndroidUtils::IsPortraitMode());
+    }
+}
+
+void Java_org_citra_citra_1emu_NativeLibrary_clearGameScreenRects([[maybe_unused]] JNIEnv* env,
+                                                                  [[maybe_unused]] jobject obj) {
+    Config::ClearGameScreenRects();
+}
+
 jboolean Java_org_citra_citra_1emu_NativeLibrary_areKeysAvailable([[maybe_unused]] JNIEnv* env,
                                                                   [[maybe_unused]] jobject obj) {
     HW::AES::InitKeys();

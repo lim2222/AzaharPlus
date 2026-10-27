@@ -279,7 +279,7 @@ class EmulationFragment :
             when (mode) {
                 InputOverlay.ScreenEditMode.SCREEN_MOVE,
                 InputOverlay.ScreenEditMode.SCREEN_SIZE -> {
-                    // Final value: write it to config.ini and apply it.
+                    // Final value: save it for this game and apply it.
                     screenEditHandler.removeCallbacks(pushScreenRunnable)
                     screenPushPending = false
                     pushSelectedScreen()
@@ -362,6 +362,8 @@ class EmulationFragment :
         try {
             game = args.game ?: intentGame!!
             OverlayPrefs.setGame(game.titleId, game.path)
+            // The screens are saved per game, hand them to the core before it boots.
+            applySavedScreenRects()
         } catch (e: NullPointerException) {
             Toast.makeText(
                 requireContext(),
@@ -1661,19 +1663,25 @@ class EmulationFragment :
     private fun scheduleScreenPush() {
         if (screenPushPending) return
         screenPushPending = true
-        // Writing config.ini and reloading it is not free, so the preview is limited to a
+        // Applying a rectangle recomputes the framebuffer layout, so the preview is limited to a
         // few updates per second while dragging.
         screenEditHandler.postDelayed(pushScreenRunnable, 120L)
     }
 
-    /** Writes the selected screen to config.ini and applies it to the running game. */
+    /**
+     * Saves the selected screen in this game's own settings and applies it to the running game.
+     * The global values in config.ini are left alone, so every game keeps its own layout.
+     */
     private fun pushSelectedScreen() {
         val index = selectedScreen
         if (index < 0 || index >= workRects.size) return
         val rect = workRects[index]
-        screenAdjustmentUtil.applyCustomScreenRect(
-            NativeLibrary.isPortraitMode(),
-            index == 0,
+        val portrait = NativeLibrary.isPortraitMode()
+        val top = index == 0
+        saveScreenRect(top, portrait, rect)
+        NativeLibrary.setGameScreenRect(
+            portrait,
+            top,
             rect.left,
             rect.top,
             rect.width(),
@@ -1681,39 +1689,101 @@ class EmulationFragment :
         )
     }
 
-    /** The two screen rectangles of the custom layout, in view pixels (top, then bottom). */
-    private fun customScreenRects(): List<Rect> {
-        return if (NativeLibrary.isPortraitMode()) {
-            listOf(
-                Rect(
-                    IntSetting.PORTRAIT_TOP_X.int,
-                    IntSetting.PORTRAIT_TOP_Y.int,
-                    IntSetting.PORTRAIT_TOP_X.int + IntSetting.PORTRAIT_TOP_WIDTH.int,
-                    IntSetting.PORTRAIT_TOP_Y.int + IntSetting.PORTRAIT_TOP_HEIGHT.int
-                ),
-                Rect(
-                    IntSetting.PORTRAIT_BOTTOM_X.int,
-                    IntSetting.PORTRAIT_BOTTOM_Y.int,
-                    IntSetting.PORTRAIT_BOTTOM_X.int + IntSetting.PORTRAIT_BOTTOM_WIDTH.int,
-                    IntSetting.PORTRAIT_BOTTOM_Y.int + IntSetting.PORTRAIT_BOTTOM_HEIGHT.int
+    /** Per game key prefix of one screen, e.g. "screenRect_landscape_top_". */
+    private fun screenRectPrefix(top: Boolean, portrait: Boolean): String =
+        "screenRect_" + (if (portrait) "portrait_" else "landscape_") +
+            (if (top) "top_" else "bottom_")
+
+    /** Stores one screen of the custom layout for this game. */
+    private fun saveScreenRect(top: Boolean, portrait: Boolean, rect: Rect) {
+        val prefix = screenRectPrefix(top, portrait)
+        overlayPrefs.edit()
+            .putInt(prefix + "x", rect.left)
+            .putInt(prefix + "y", rect.top)
+            .putInt(prefix + "width", rect.width())
+            .putInt(prefix + "height", rect.height())
+            .apply()
+    }
+
+    /** The rectangle saved for this game, or null when this screen was never edited in it. */
+    private fun savedScreenRect(top: Boolean, portrait: Boolean): Rect? {
+        val prefix = screenRectPrefix(top, portrait)
+        if (!overlayPrefs.contains(prefix + "x")) return null
+        val x = overlayPrefs.getInt(prefix + "x", 0)
+        val y = overlayPrefs.getInt(prefix + "y", 0)
+        return Rect(
+            x,
+            y,
+            x + overlayPrefs.getInt(prefix + "width", 0),
+            y + overlayPrefs.getInt(prefix + "height", 0)
+        )
+    }
+
+    /**
+     * Hands the screens saved for this game to the core before it boots. The core keeps them while
+     * the game runs, so the config.ini reads done while playing (NativeLibrary.reloadSettings())
+     * do not reset them. Screens without a saved rectangle keep their global config.ini value.
+     */
+    private fun applySavedScreenRects() {
+        NativeLibrary.clearGameScreenRects()
+        for (portrait in booleanArrayOf(false, true)) {
+            for (top in booleanArrayOf(true, false)) {
+                val rect = savedScreenRect(top, portrait) ?: continue
+                NativeLibrary.setGameScreenRect(
+                    portrait,
+                    top,
+                    rect.left,
+                    rect.top,
+                    rect.width(),
+                    rect.height()
                 )
-            )
-        } else {
-            listOf(
-                Rect(
-                    IntSetting.LANDSCAPE_TOP_X.int,
-                    IntSetting.LANDSCAPE_TOP_Y.int,
-                    IntSetting.LANDSCAPE_TOP_X.int + IntSetting.LANDSCAPE_TOP_WIDTH.int,
-                    IntSetting.LANDSCAPE_TOP_Y.int + IntSetting.LANDSCAPE_TOP_HEIGHT.int
-                ),
-                Rect(
-                    IntSetting.LANDSCAPE_BOTTOM_X.int,
-                    IntSetting.LANDSCAPE_BOTTOM_Y.int,
-                    IntSetting.LANDSCAPE_BOTTOM_X.int + IntSetting.LANDSCAPE_BOTTOM_WIDTH.int,
-                    IntSetting.LANDSCAPE_BOTTOM_Y.int + IntSetting.LANDSCAPE_BOTTOM_HEIGHT.int
-                )
-            )
+            }
         }
+    }
+
+    /** The two screen rectangles of the custom layout, in view pixels (top, then bottom). */
+    private fun customScreenRects(): List<Rect> = listOf(screenRect(true), screenRect(false))
+
+    /**
+     * One screen of the custom layout, in view pixels: the rectangle saved for this game, or the
+     * global one from config.ini when the game has none yet, so a game starts from the global
+     * layout and is independent from it after the first edit.
+     */
+    private fun screenRect(top: Boolean): Rect {
+        val portrait = NativeLibrary.isPortraitMode()
+        savedScreenRect(top, portrait)?.let { return it }
+        val x: Int
+        val y: Int
+        val width: Int
+        val height: Int
+        if (portrait) {
+            x = if (top) IntSetting.PORTRAIT_TOP_X.int else IntSetting.PORTRAIT_BOTTOM_X.int
+            y = if (top) IntSetting.PORTRAIT_TOP_Y.int else IntSetting.PORTRAIT_BOTTOM_Y.int
+            width = if (top) {
+                IntSetting.PORTRAIT_TOP_WIDTH.int
+            } else {
+                IntSetting.PORTRAIT_BOTTOM_WIDTH.int
+            }
+            height = if (top) {
+                IntSetting.PORTRAIT_TOP_HEIGHT.int
+            } else {
+                IntSetting.PORTRAIT_BOTTOM_HEIGHT.int
+            }
+        } else {
+            x = if (top) IntSetting.LANDSCAPE_TOP_X.int else IntSetting.LANDSCAPE_BOTTOM_X.int
+            y = if (top) IntSetting.LANDSCAPE_TOP_Y.int else IntSetting.LANDSCAPE_BOTTOM_Y.int
+            width = if (top) {
+                IntSetting.LANDSCAPE_TOP_WIDTH.int
+            } else {
+                IntSetting.LANDSCAPE_BOTTOM_WIDTH.int
+            }
+            height = if (top) {
+                IntSetting.LANDSCAPE_TOP_HEIGHT.int
+            } else {
+                IntSetting.LANDSCAPE_BOTTOM_HEIGHT.int
+            }
+        }
+        return Rect(x, y, x + width, y + height)
     }
 
     private fun isCustomLayout(): Boolean =
