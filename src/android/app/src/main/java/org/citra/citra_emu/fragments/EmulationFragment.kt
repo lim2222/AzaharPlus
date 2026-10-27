@@ -43,6 +43,8 @@ import android.widget.TextView
 import android.widget.Toast
 import android.widget.Toast.LENGTH_LONG
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.content.res.ResourcesCompat
@@ -166,32 +168,55 @@ class EmulationFragment :
         pushSelectedScreen()
     }
 
-    // The picker has to be created while the fragment is constructed.
-    private val pickBackground =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-            if (uri == null) {
-                Log.info("[BG] picker cancelled")
-                return@registerForActivityResult
-            }
-            // A rotation can destroy the fragment view while the picker is open; the image is
-            // saved anyway and restoreBackground() / onResume() pick it up for the new view.
-            val ctx = context ?: CitraApplication.appContext
-            // Keep read access after a restart of the app.
-            try {
-                ctx.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (e: SecurityException) {
-                // Not offered by the provider; the image still loads until the app is closed.
-                Log.info("[BG] no persistable permission: " + e.message)
-            }
-            // One image per orientation, like the scale, the opacity and the placement.
-            val key = backgroundUriKey()
-            overlayPrefs.edit().putString(key, uri.toString()).apply()
-            Log.info("[BG] picked uri=$uri key=$key")
-            loadBackground(uri)
+    // The background picker is registered on the ActivityResultRegistry of the activity that is
+    // running now instead of with Fragment.registerForActivityResult(). That one binds its launcher
+    // to the registry of the activity the fragment was created with and keeps it, and this fragment
+    // survives rotations (retainInstance = true). After a rotation the picker still opens, but the
+    // result is delivered to the new activity, whose registry does not know that launcher, so the
+    // pick was dropped and the image that was already on screen stayed there.
+    private var pickBackgroundRegistry: ActivityResultRegistry? = null
+    private var pickBackground: ActivityResultLauncher<Array<String>>? = null
+
+    /** The background picker, bound to the registry of the current activity. */
+    private fun backgroundPicker(): ActivityResultLauncher<Array<String>>? {
+        val registry = activity?.activityResultRegistry ?: return null
+        if (pickBackgroundRegistry === registry) return pickBackground
+        // Another activity is running now (a rotation happened), and its registry is the one the
+        // result is delivered to, so the registration has to be made on it before the picker opens.
+        // The launcher of the previous registry is dropped; that registry dies with the activity.
+        pickBackgroundRegistry = registry
+        pickBackground = registry.register(
+            BACKGROUND_PICK_KEY,
+            ActivityResultContracts.OpenDocument()
+        ) { uri: Uri? -> onBackgroundPicked(uri) }
+        Log.info("[BG] picker registered on the current activity registry")
+        return pickBackground
+    }
+
+    private fun onBackgroundPicked(uri: Uri?) {
+        if (uri == null) {
+            Log.info("[BG] picker cancelled")
+            return
         }
+        // A rotation can destroy the fragment view while the picker is open; the image is
+        // saved anyway and restoreBackground() / onResume() pick it up for the new view.
+        val ctx = context ?: CitraApplication.appContext
+        // Keep read access after a restart of the app.
+        try {
+            ctx.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: SecurityException) {
+            // Not offered by the provider; the image still loads until the app is closed.
+            Log.info("[BG] no persistable permission: " + e.message)
+        }
+        // One image per orientation, like the scale, the opacity and the placement.
+        val key = backgroundUriKey()
+        overlayPrefs.edit().putString(key, uri.toString()).apply()
+        Log.info("[BG] picked uri=$uri key=$key")
+        loadBackground(uri)
+    }
 
     private val screenEditListener = object : InputOverlay.ScreenEditListener {
         override fun onEditDragStart(mode: InputOverlay.ScreenEditMode, x: Float, y: Float) {
@@ -1817,7 +1842,14 @@ class EmulationFragment :
     }
 
     private fun openBackgroundPicker() {
-        pickBackground.launch(arrayOf("image/*"))
+        // Looked up every time, so the picker always belongs to the running activity and its result
+        // has a callback to come back to.
+        val picker = backgroundPicker()
+        if (picker == null) {
+            Log.info("[BG] no activity to open the picker from")
+            return
+        }
+        picker.launch(arrayOf("image/*"))
     }
 
     /** Reads the image on a background thread, scaled down so it cannot run out of memory. */
@@ -2684,6 +2716,9 @@ class EmulationFragment :
     }
 
     companion object {
+        /** Key of the background picker in the activity's ActivityResultRegistry. */
+        private const val BACKGROUND_PICK_KEY = "emulation_background_pick"
+
         private val perfStatsUpdateHandler = Handler(Looper.myLooper()!!)
         private var hasPrevious = false
     }
