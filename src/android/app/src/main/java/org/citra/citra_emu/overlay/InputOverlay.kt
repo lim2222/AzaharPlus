@@ -872,7 +872,8 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         val opacity = getOpacityPerOrient("tatacon", orientation)
 
         val artwork = InputOverlayDrawableTaTaCon.cropArtwork(
-            BitmapFactory.decodeResource(resources, R.drawable.tatacon)
+            ButtonPack.load(context, R.drawable.tatacon)
+                ?: BitmapFactory.decodeResource(resources, R.drawable.tatacon)
         )
         val targetWidth = (minDimension * TATACON_SIZE_RATIO * sizeFactor).toInt()
         // Height relative to the natural proportions, changed with Resize in the layout editor.
@@ -1730,6 +1731,9 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
          * @return The scaled [Bitmap]
          */
         private fun getBitmap(context: Context, drawableId: Int, scale: Float): Bitmap {
+            // An image of the same name in the installed button pack replaces the built-in one.
+            ButtonPack.load(context, drawableId)?.let { return resizeBitmap(context, it, scale) }
+
             try {
                 val bitmap = BitmapFactory.decodeResource(context.resources, drawableId)
                 return resizeBitmap(context, bitmap, scale)

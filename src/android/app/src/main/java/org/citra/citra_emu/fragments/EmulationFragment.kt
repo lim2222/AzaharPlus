@@ -65,6 +65,7 @@ import androidx.preference.PreferenceManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.slider.Slider
 import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -104,6 +105,7 @@ import org.citra.citra_emu.utils.ViewUtils
 import org.citra.citra_emu.viewmodel.EmulationViewModel
 import org.citra.citra_emu.overlay.OverlayPrefs
 import org.citra.citra_emu.overlay.InputOverlay
+import org.citra.citra_emu.overlay.ButtonPack
 
 class EmulationFragment :
     Fragment(),
@@ -176,6 +178,8 @@ class EmulationFragment :
     // pick was dropped and the image that was already on screen stayed there.
     private var pickBackgroundRegistry: ActivityResultRegistry? = null
     private var pickBackground: ActivityResultLauncher<Array<String>>? = null
+    private var pickButtonPackRegistry: ActivityResultRegistry? = null
+    private var pickButtonPack: ActivityResultLauncher<Array<String>>? = null
 
     /** The background picker, bound to the registry of the current activity. */
     private fun backgroundPicker(): ActivityResultLauncher<Array<String>>? {
@@ -191,6 +195,60 @@ class EmulationFragment :
         ) { uri: Uri? -> onBackgroundPicked(uri) }
         Log.info("[BG] picker registered on the current activity registry")
         return pickBackground
+    }
+
+    /** The button-pack picker, bound to the registry of the current activity. */
+    private fun buttonPackPicker(): ActivityResultLauncher<Array<String>>? {
+        val registry = activity?.activityResultRegistry ?: return null
+        if (pickButtonPackRegistry === registry) return pickButtonPack
+        pickButtonPackRegistry = registry
+        pickButtonPack = registry.register(
+            BUTTON_PACK_PICK_KEY,
+            ActivityResultContracts.OpenDocument()
+        ) { uri: Uri? -> onButtonPackPicked(uri) }
+        return pickButtonPack
+    }
+
+    private fun onButtonPackPicked(uri: Uri?) {
+        if (uri == null) return
+        val appContext = CitraApplication.appContext
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val stream = appContext.contentResolver.openInputStream(uri)
+                    if (stream == null) {
+                        Result.failure<Int>(IOException("Cannot open the file"))
+                    } else {
+                        ButtonPack.installFromZip(appContext, stream)
+                    }
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
+            if (!isAdded) return@launch
+            result.onSuccess { count ->
+                if (count > 0) {
+                    Toast.makeText(
+                        requireContext(),
+                        "Button pack installed: $count images",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    _binding?.surfaceInputOverlay?.refreshControls()
+                } else {
+                    Toast.makeText(
+                        requireContext(),
+                        "No button images found in the zip",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }.onFailure {
+                Toast.makeText(
+                    requireContext(),
+                    "Could not read the zip file",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 
     private fun onBackgroundPicked(uri: Uri?) {
@@ -468,6 +526,7 @@ class EmulationFragment :
             updateBackground()
         }
         binding.btnEditBg.setOnClickListener { openBackgroundPicker() }
+        binding.btnEditPack.setOnClickListener { showButtonPackDialog() }
         binding.btnEditBgRemove.setOnClickListener { removeBackground() }
         binding.surfaceInputOverlay.screenEditListener = screenEditListener
         // Paint the wallpaper from the input overlay: it is drawn above the emulation surface,
@@ -1842,6 +1901,35 @@ class EmulationFragment :
         return true
     }
 
+    private fun showButtonPackDialog() {
+        val items = arrayOf("Choose a zip file…", "Use the built-in buttons")
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Button pack")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        val picker = buttonPackPicker()
+                        if (picker == null) {
+                            Log.info("[ButtonPack] no activity to open the picker from")
+                        } else {
+                            picker.launch(
+                                arrayOf(
+                                    "application/zip",
+                                    "application/x-zip-compressed",
+                                    "application/octet-stream"
+                                )
+                            )
+                        }
+                    }
+                    1 -> {
+                        ButtonPack.clear(CitraApplication.appContext)
+                        binding.surfaceInputOverlay.refreshControls()
+                    }
+                }
+            }
+            .show()
+    }
+
     private fun openBackgroundPicker() {
         // Looked up every time, so the picker always belongs to the running activity and its result
         // has a callback to come back to.
@@ -2748,6 +2836,7 @@ class EmulationFragment :
     companion object {
         /** Key of the background picker in the activity's ActivityResultRegistry. */
         private const val BACKGROUND_PICK_KEY = "emulation_background_pick"
+        private const val BUTTON_PACK_PICK_KEY = "emulation_button_pack_pick"
 
         private val perfStatsUpdateHandler = Handler(Looper.myLooper()!!)
         private var hasPrevious = false
