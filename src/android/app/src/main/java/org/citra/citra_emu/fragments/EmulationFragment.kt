@@ -193,7 +193,6 @@ class EmulationFragment :
             BACKGROUND_PICK_KEY,
             ActivityResultContracts.OpenDocument()
         ) { uri: Uri? -> onBackgroundPicked(uri) }
-        Log.info("[BG] picker registered on the current activity registry")
         return pickBackground
     }
 
@@ -253,7 +252,6 @@ class EmulationFragment :
 
     private fun onBackgroundPicked(uri: Uri?) {
         if (uri == null) {
-            Log.info("[BG] picker cancelled")
             return
         }
         // A rotation can destroy the fragment view while the picker is open; the image is
@@ -267,12 +265,10 @@ class EmulationFragment :
             )
         } catch (e: SecurityException) {
             // Not offered by the provider; the image still loads until the app is closed.
-            Log.info("[BG] no persistable permission: " + e.message)
         }
         // One image per orientation, like the scale, the opacity and the placement.
         val key = backgroundUriKey()
         overlayPrefs.edit().putString(key, uri.toString()).apply()
-        Log.info("[BG] picked uri=$uri key=$key")
         loadBackground(uri)
     }
 
@@ -1935,7 +1931,6 @@ class EmulationFragment :
         // has a callback to come back to.
         val picker = backgroundPicker()
         if (picker == null) {
-            Log.info("[BG] no activity to open the picker from")
             return
         }
         picker.launch(arrayOf("image/*"))
@@ -1946,7 +1941,6 @@ class EmulationFragment :
         if (_binding == null) {
             // No view right now (a rotation is in progress): the saved image is loaded by
             // restoreBackground() / onResume() instead.
-            Log.info("[BG] no view yet for $uri")
             return
         }
         val text = uri.toString()
@@ -1959,7 +1953,6 @@ class EmulationFragment :
                 if (bitmap == null) {
                     // Keep the saved image: a failed read (permissions, provider quirks) must not
                     // wipe the choice, and the image that is already on screen stays there.
-                    Log.info("[BG] could not decode $uri (retry=$retry)")
                     if (retry) {
                         // Providers can be slow to hand the document out right after the picker
                         // closes, so one retry is worth it. Only retry while this is still the
@@ -1983,15 +1976,10 @@ class EmulationFragment :
                 }
                 if (savedBackgroundUri() != text) {
                     // The image was replaced or removed while it was being read.
-                    Log.info("[BG] dropping $text, it is not the image of this orientation anymore")
                     return@launch
                 }
                 binding.backgroundImage.setBitmap(bitmap)
                 shownBackgroundUri = text
-                Log.info(
-                    "[BG] bitmap loaded " + bitmap.width + "x" + bitmap.height +
-                        " key=" + backgroundUriKey() + " uri=$text"
-                )
                 updateBackground()
             } finally {
                 if (loadingBackgroundUri == text) loadingBackgroundUri = null
@@ -2019,9 +2007,7 @@ class EmulationFragment :
                     BitmapFactory.decodeStream(it, null, options)
                 }?.let { return it }
             }
-            Log.info("[BG] stream decode failed for $uri ($bounds)")
         } catch (e: Exception) {
-            Log.info("[BG] stream decode failed for $uri: $e")
         }
 
         try {
@@ -2037,14 +2023,11 @@ class EmulationFragment :
                     BitmapFactory.decodeFileDescriptor(pfd.fileDescriptor, null, options)
                 }?.let { return it }
             }
-            Log.info("[BG] descriptor decode failed for $uri ($bounds)")
         } catch (e: Exception) {
-            Log.info("[BG] descriptor decode failed for $uri: $e")
         }
 
         val path = documentFilePath(uri)
             ?: return null
-        Log.info("[BG] falling back to the file at $path")
         try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(path, bounds)
@@ -2054,7 +2037,6 @@ class EmulationFragment :
             }
             return BitmapFactory.decodeFile(path, options)
         } catch (e: Exception) {
-            Log.info("[BG] file decode failed for $path: $e")
         }
         return null
     }
@@ -2107,7 +2089,6 @@ class EmulationFragment :
 
     private fun restoreBackground() {
         val saved = savedBackgroundUri()
-        Log.info("[BG] restore uri=$saved key=" + backgroundUriKey())
         if (saved == null) return
         loadBackground(Uri.parse(saved))
     }
@@ -2127,7 +2108,6 @@ class EmulationFragment :
         loadingBackgroundUri = null
         _binding?.backgroundImage?.setBitmap(null)
         updateBackground()
-        Log.info("[BG] image removed for $key")
     }
 
     /**
@@ -2139,7 +2119,6 @@ class EmulationFragment :
     private fun reloadBackgroundIfNeeded() {
         val saved = savedBackgroundUri() ?: return
         if (saved == shownBackgroundUri) return
-        Log.info("[BG] resume: loading $saved (shown=$shownBackgroundUri)")
         loadBackground(Uri.parse(saved))
     }
 
@@ -2156,19 +2135,12 @@ class EmulationFragment :
     private fun updateBackground(ensureLayout: Boolean = true) {
         val view = _binding?.backgroundImage ?: return
         if (!view.hasBitmap) {
-            Log.info("[BG] hidden: no image loaded")
             view.visibility = View.GONE
             return
         }
         if (!isCustomLayout()) {
             // changeToCustomLayout() applies the setting and updates the framebuffer, which can
             // call back into this method. The guard keeps that from recursing.
-            Log.info(
-                "[BG] not custom layout. portrait=" + NativeLibrary.isPortraitMode() +
-                    " screen layout=" + IntSetting.SCREEN_LAYOUT.int +
-                    " portrait layout=" + IntSetting.PORTRAIT_SCREEN_LAYOUT.int +
-                    " ensureLayout=" + ensureLayout + " switching=" + switchingToCustomLayout
-            )
             if (ensureLayout && !switchingToCustomLayout) {
                 switchingToCustomLayout = true
                 try {
@@ -2185,12 +2157,6 @@ class EmulationFragment :
             }
             if (!isCustomLayout()) {
                 // Could not switch: hide the image instead of covering the game with it.
-                Log.info(
-                    "[BG] hidden: layout is not the custom one. " +
-                        "Portrait: " + NativeLibrary.isPortraitMode() +
-                        " screen layout: " + IntSetting.SCREEN_LAYOUT.int +
-                        " portrait layout: " + IntSetting.PORTRAIT_SCREEN_LAYOUT.int
-                )
                 view.visibility = View.GONE
                 return
             }
@@ -2199,15 +2165,6 @@ class EmulationFragment :
         view.setHoles(rects)
         applyBackgroundTransform()
         view.visibility = View.VISIBLE
-        Log.info(
-            "[BG] shown. img=" + view.bitmapWidth + "x" + view.bitmapHeight +
-                " view=" + view.width + "x" + view.height +
-                " portrait=" + NativeLibrary.isPortraitMode() +
-                " suffix=" + editToolbarOrientation() +
-                " t=" + view.translateX + "," + view.translateY +
-                " s=" + view.scaleX2 + "," + view.scaleY2 +
-                " holes=" + rects
-        )
     }
 
     private fun saveBackgroundTransform() {
@@ -2227,7 +2184,6 @@ class EmulationFragment :
         val ty = overlayPrefs.getFloat("bgTy$suffix", 0f)
         val sx = overlayPrefs.getFloat("bgSx$suffix", 1f)
         val sy = overlayPrefs.getFloat("bgSy$suffix", 1f)
-        Log.info("[BG] transform suffix=$suffix tx=$tx ty=$ty sx=$sx sy=$sy")
         binding.backgroundImage.setTransform(tx, ty, sx, sy)
     }
 

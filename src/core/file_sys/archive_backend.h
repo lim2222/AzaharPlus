@@ -218,7 +218,13 @@ public:
         if (delay_generator != nullptr) {
             return delay_generator->GetOpenDelayNs();
         }
-        LOG_ERROR(Service_FS, "Delay generator was not initalized. Using default");
+        // This fires for every open that lacks a delay generator, which can flood the log;
+        // report it only once.
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            LOG_ERROR(Service_FS, "Delay generator was not initalized. Using default");
+        }
         delay_generator = std::make_unique<DefaultDelayGenerator>();
         return delay_generator->GetOpenDelayNs();
     }

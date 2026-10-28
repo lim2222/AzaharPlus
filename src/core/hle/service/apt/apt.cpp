@@ -730,9 +730,14 @@ void Module::APTInterface::AppletUtility(Kernel::HLERequestContext& ctx) {
     const auto output_size = rp.Pop<u32>();
     [[maybe_unused]] const auto input = rp.PopStaticBuffer();
 
-    LOG_WARNING(Service_APT,
-                "(STUBBED) called command={:#010X}, input_size={:#010X}, output_size={:#010X}",
-                utility_command, input_size, output_size);
+    // Reported only once; this stub can be called many times per session.
+    static bool logged_applet_utility = false;
+    if (!logged_applet_utility) {
+        logged_applet_utility = true;
+        LOG_WARNING(Service_APT,
+                    "(STUBBED) called command={:#010X}, input_size={:#010X}, output_size={:#010X}",
+                    utility_command, input_size, output_size);
+    }
 
     std::vector<u8> out(output_size);
     if (utility_command == 0x6 && output_size > 0) {
@@ -1000,8 +1005,13 @@ void Module::APTInterface::ReplySleepQuery(Kernel::HLERequestContext& ctx) {
     const auto from_app_id = rp.PopEnum<AppletId>();
     const auto reply_value = rp.PopEnum<SleepQueryReply>();
 
-    LOG_WARNING(Service_APT, "(STUBBED) called, from_app_id={:08X}, reply_value={:08X}",
-                from_app_id, reply_value);
+    // Reported only once; this stub can be called many times per session.
+    static bool logged_reply_sleep_query = false;
+    if (!logged_reply_sleep_query) {
+        logged_reply_sleep_query = true;
+        LOG_WARNING(Service_APT, "(STUBBED) called, from_app_id={:08X}, reply_value={:08X}",
+                    from_app_id, reply_value);
+    }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess);

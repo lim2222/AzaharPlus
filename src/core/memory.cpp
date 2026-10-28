@@ -5,6 +5,8 @@
 #include <array>
 #include <csignal>
 #include <cstring>
+#include <mutex>
+#include <unordered_set>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/binary_object.hpp>
 #include "audio_core/dsp_interface.h"
@@ -567,16 +569,25 @@ void MemorySystem::UnregisterPageTable(std::shared_ptr<PageTable> page_table) {
 
 template <typename T>
 void MemorySystem::UnmappedAccess(const VAddr vaddr, const T value, bool read) {
-    const std::string mode = (read ? "Read" : "Write");
-    const std::string value_str = read ? std::string("") : fmt::format(" 0x{:08X}", value);
-    const std::string message = fmt::format("unmapped {}{}{} @ 0x{:08X} at PC 0x{:08X}", mode,
-                                            sizeof(T) * 8, value_str, vaddr, impl->GetPC());
 #ifdef ENABLE_GDBSTUB
     if (GDBStub::IsConnected()) {
         GDBStub::Break(SIGSEGV);
     }
 #endif
-    LOG_ERROR(HW_Memory, "{}", message);
+    // A game that keeps touching the same unmapped address can flood the log with thousands of
+    // identical lines, so only the first access to each address is reported.
+    {
+        static std::mutex logged_mutex;
+        static std::unordered_set<VAddr> logged_addresses;
+        std::lock_guard<std::mutex> lock(logged_mutex);
+        if (logged_addresses.insert(vaddr).second) {
+            const std::string mode = (read ? "Read" : "Write");
+            const std::string value_str =
+                read ? std::string("") : fmt::format(" 0x{:08X}", value);
+            LOG_ERROR(HW_Memory, "unmapped {}{}{} @ 0x{:08X} at PC 0x{:08X}",
+                      mode, sizeof(T) * 8, value_str, vaddr, impl->GetPC());
+        }
+    }
     if (Settings::values.enable_exception_handler) {
         Core::LogException(impl->system, read ? Core::ExceptionType::UnmappedRead
                                               : Core::ExceptionType::UnmappedWrite);

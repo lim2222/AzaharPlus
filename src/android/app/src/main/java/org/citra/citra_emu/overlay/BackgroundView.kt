@@ -11,7 +11,6 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
-import org.citra.citra_emu.utils.Log
 import kotlin.math.max
 
 /**
@@ -31,8 +30,6 @@ class BackgroundView(context: Context, attrs: AttributeSet?) : View(context, att
     private val holes = ArrayList<Rect>()
     private val drawMatrix = Matrix()
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-    // Last state logged from onDraw, so a redraw every frame does not flood the log.
-    private var lastLoggedState = ""
 
     /** View that also paints this background (the input overlay); it has to be invalidated too. */
     var mirror: View? = null
@@ -168,17 +165,7 @@ class BackgroundView(context: Context, attrs: AttributeSet?) : View(context, att
         drawMatrix.postScale(scaleX2, scaleY2, width / 2f, height / 2f)
         drawMatrix.postTranslate(translateX, translateY)
 
-        val drawn = RectF(0f, 0f, b.width.toFloat(), b.height.toFloat())
-        drawMatrix.mapRect(drawn)
         val areas = visibleAreas()
-        val state = "bmp=" + b.width + "x" + b.height + " view=" + width + "x" + height +
-            " vis=" + visibility + " t=" + translateX + "," + translateY +
-            " s=" + scaleX2 + "," + scaleY2 + " dst=" + drawn + " areas=" + areas.size +
-            " holes=" + holes.joinToString(";") { r -> r.flattenToString() }
-        if (state != lastLoggedState) {
-            lastLoggedState = state
-            Log.info("[BG] draw " + state)
-        }
 
         val saved = canvas.save()
         for (area in areas) {
