@@ -58,16 +58,40 @@ class InputOverlayDrawableButton(
     private val pressedStateBitmap: BitmapDrawable
     private var pressedState = false
 
-    // State of an edit-layout resize gesture.
     private var resizeCenterX = 0
     private var resizeCenterY = 0
-    private var resizeStartDist = 1
     private var resizeStartWidth = 0
     private var resizeStartHeight = 0
+    private val resizeGesture = ResizeGesture()
 
     /** Current size relative to the size the drawable was created with (1.0 = unchanged). */
     val resizeRatio: Float
         get() = bounds.width().toFloat() / width
+
+    val resizeValue: Float
+        get() = resizeGesture.value
+
+    fun beginResize(x: Float, screenWidth: Int, startValue: Int) {
+        resizeGesture.begin(x, screenWidth, startValue)
+    }
+
+    fun finishResize() {
+        applyResizeBounds()
+    }
+
+    private fun applyResizeBounds() {
+        val ratio = resizeGesture.ratio
+        val newWidth = (resizeStartWidth * ratio).toInt().coerceAtLeast(20)
+        val newHeight = (resizeStartHeight * ratio).toInt().coerceAtLeast(20)
+        controlPositionX = resizeCenterX - newWidth / 2
+        controlPositionY = resizeCenterY - newHeight / 2
+        setBounds(
+            controlPositionX,
+            controlPositionY,
+            controlPositionX + newWidth,
+            controlPositionY + newHeight
+        )
+    }
 
     init {
         this.defaultStateBitmap = BitmapDrawable(res, defaultStateBitmap)
@@ -175,13 +199,6 @@ class InputOverlayDrawableButton(
                 resizeCenterY = bounds.centerY()
                 resizeStartWidth = bounds.width()
                 resizeStartHeight = bounds.height()
-                resizeStartDist = maxOf(
-                    10,
-                    Math.hypot(
-                        (fingerPositionX - resizeCenterX).toDouble(),
-                        (fingerPositionY - resizeCenterY).toDouble()
-                    ).toInt()
-                )
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -200,22 +217,8 @@ class InputOverlayDrawableButton(
                     }
 
                     InputOverlay.EditAction.RESIZE -> {
-                        // Scale around the center, by how far the finger is from it.
-                        val dist = Math.hypot(
-                            (fingerPositionX - resizeCenterX).toDouble(),
-                            (fingerPositionY - resizeCenterY).toDouble()
-                        ).toFloat()
-                        val ratio = (dist / resizeStartDist).coerceIn(0.2f, 5.0f)
-                        val newWidth = (resizeStartWidth * ratio).toInt().coerceAtLeast(20)
-                        val newHeight = (resizeStartHeight * ratio).toInt().coerceAtLeast(20)
-                        controlPositionX = resizeCenterX - newWidth / 2
-                        controlPositionY = resizeCenterY - newHeight / 2
-                        setBounds(
-                            controlPositionX,
-                            controlPositionY,
-                            controlPositionX + newWidth,
-                            controlPositionY + newHeight
-                        )
+                        resizeGesture.update(event.getX(pointerIndex), event.eventTime)
+                        applyResizeBounds()
                     }
 
                     InputOverlay.EditAction.OPACITY -> {

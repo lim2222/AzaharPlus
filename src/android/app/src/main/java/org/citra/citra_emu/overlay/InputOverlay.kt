@@ -104,6 +104,34 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         invalidate()
     }
 
+    /** Shows the scale value of the control being resized. */
+    private fun drawResizeLabel(canvas: Canvas) {
+        val value: Float
+        val bounds: Rect
+        when {
+            buttonBeingConfigured != null -> {
+                value = buttonBeingConfigured!!.resizeValue
+                bounds = buttonBeingConfigured!!.bounds
+            }
+            dpadBeingConfigured != null -> {
+                value = dpadBeingConfigured!!.resizeValue
+                bounds = dpadBeingConfigured!!.bounds
+            }
+            joystickBeingConfigured != null -> {
+                value = joystickBeingConfigured!!.resizeValue
+                bounds = joystickBeingConfigured!!.bounds
+            }
+            else -> return
+        }
+        outlineLabelPaint.color = Color.WHITE
+        canvas.drawText(
+            "Size ${Math.round(value)}",
+            bounds.left.toFloat(),
+            (bounds.top - 16f).coerceAtLeast(40f),
+            outlineLabelPaint
+        )
+    }
+
     /** [rects]: top screen first, bottom screen second. [selected] is -1 when none is picked. */
     fun setScreenOutlines(rects: List<Rect>, selected: Int) {
         screenOutlines = rects.map { Rect(it) }
@@ -221,6 +249,9 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         overlayDpads.forEach { it.draw(canvas) }
         overlayJoysticks.forEach { it.draw(canvas) }
         overlayTaTaCon?.draw(canvas)
+        if (isInEditMode && editAction == EditAction.RESIZE && screenEditMode == ScreenEditMode.NONE) {
+            drawResizeLabel(canvas)
+        }
         if (isInEditMode &&
             (screenEditMode == ScreenEditMode.SCREEN_MOVE ||
                 screenEditMode == ScreenEditMode.SCREEN_SIZE)
@@ -512,6 +543,13 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                         it.bounds.contains(fingerPositionX, fingerPositionY)
                     ) {
                         buttonBeingConfigured = it
+                        if (editAction == EditAction.RESIZE) {
+                            it.beginResize(
+                                event.getX(pointerIndex),
+                                width,
+                                getIntPerOrient("controlScale-${it.id}", orientation, 50),
+                            )
+                        }
                         buttonBeingConfigured!!.onConfigureTouch(event, editAction)
                     }
 
@@ -531,6 +569,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                         )
 
                         EditAction.RESIZE -> {
+                            edited.finishResize()
                             saveScaleFromRatio("controlScale-${edited.id}$orientation", edited.resizeRatio)
                             saveControlPosition(
                                 edited.id, edited.bounds.left, edited.bounds.top, orientation
@@ -557,6 +596,17 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                         it.bounds.contains(fingerPositionX, fingerPositionY)
                     ) {
                         dpadBeingConfigured = it
+                        if (editAction == EditAction.RESIZE) {
+                            it.beginResize(
+                                event.getX(pointerIndex),
+                                width,
+                                getIntPerOrient(
+                                    "controlScale-${NativeLibrary.ButtonType.DPAD}",
+                                    orientation,
+                                    50
+                                ),
+                            )
+                        }
                         dpadBeingConfigured!!.onConfigureTouch(event, editAction)
                     }
 
@@ -577,6 +627,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                         )
 
                         EditAction.RESIZE -> {
+                            edited.finishResize()
                             saveScaleFromRatio(scaleKey, edited.resizeRatio)
                             saveControlPosition(
                                 edited.upId, edited.bounds.left, edited.bounds.top, orientation
@@ -597,6 +648,13 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                     it.bounds.contains(fingerPositionX, fingerPositionY)
                 ) {
                     joystickBeingConfigured = it
+                    if (editAction == EditAction.RESIZE) {
+                        it.beginResize(
+                            event.getX(pointerIndex),
+                            width,
+                            getIntPerOrient("controlScale-${it.joystickId}", orientation, 50),
+                        )
+                    }
                     joystickBeingConfigured!!.onConfigureTouch(event, editAction)
                 }
 
@@ -616,6 +674,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                         )
 
                         EditAction.RESIZE -> {
+                            edited.finishResize()
                             saveScaleFromRatio(scaleKey, edited.resizeRatio)
                             saveControlPosition(
                                 edited.joystickId, edited.bounds.left, edited.bounds.top, orientation

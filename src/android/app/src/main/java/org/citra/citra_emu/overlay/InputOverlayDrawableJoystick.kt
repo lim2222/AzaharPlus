@@ -63,18 +63,43 @@ class InputOverlayDrawableJoystick(
     private val boundsBoxBitmap: BitmapDrawable
     private var pressedState = false
 
-    // State of an edit-layout resize gesture.
     private var resizeCenterX = 0
     private var resizeCenterY = 0
-    private var resizeStartDist = 1
     private var resizeStartWidth = 0
     private var resizeStartHeight = 0
     private var resizeStartInnerWidth = 0
     private var resizeStartInnerHeight = 0
+    private val resizeGesture = ResizeGesture()
 
     /** Current size relative to the size the drawable was created with (1.0 = unchanged). */
     val resizeRatio: Float
         get() = bounds.width().toFloat() / initialOuterWidth
+
+    val resizeValue: Float
+        get() = resizeGesture.value
+
+    fun beginResize(x: Float, screenWidth: Int, startValue: Int) {
+        resizeGesture.begin(x, screenWidth, startValue)
+    }
+
+    fun finishResize() {
+        applyResizeBounds()
+    }
+
+    private fun applyResizeBounds() {
+        val ratio = resizeGesture.ratio
+        val newWidth = (resizeStartWidth * ratio).toInt().coerceAtLeast(40)
+        val newHeight = (resizeStartHeight * ratio).toInt().coerceAtLeast(40)
+        controlPositionX = resizeCenterX - newWidth / 2
+        controlPositionY = resizeCenterY - newHeight / 2
+        pressedStateInnerBitmap.bounds = Rect(
+            0,
+            0,
+            (resizeStartInnerWidth * ratio).toInt().coerceAtLeast(10),
+            (resizeStartInnerHeight * ratio).toInt().coerceAtLeast(10)
+        )
+        applyOuterBounds(controlPositionX, controlPositionY, newWidth, newHeight)
+    }
 
     var bounds: Rect
         get() = outerBitmap.bounds
@@ -225,13 +250,6 @@ class InputOverlayDrawableJoystick(
                 resizeStartHeight = bounds.height()
                 resizeStartInnerWidth = pressedStateInnerBitmap.bounds.width()
                 resizeStartInnerHeight = pressedStateInnerBitmap.bounds.height()
-                resizeStartDist = maxOf(
-                    10,
-                    Math.hypot(
-                        (fingerPositionX - resizeCenterX).toDouble(),
-                        (fingerPositionY - resizeCenterY).toDouble()
-                    ).toInt()
-                )
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -250,23 +268,8 @@ class InputOverlayDrawableJoystick(
                     }
 
                     InputOverlay.EditAction.RESIZE -> {
-                        val dist = Math.hypot(
-                            (fingerPositionX - resizeCenterX).toDouble(),
-                            (fingerPositionY - resizeCenterY).toDouble()
-                        ).toFloat()
-                        val ratio = (dist / resizeStartDist).coerceIn(0.2f, 5.0f)
-                        val newWidth = (resizeStartWidth * ratio).toInt().coerceAtLeast(40)
-                        val newHeight = (resizeStartHeight * ratio).toInt().coerceAtLeast(40)
-                        controlPositionX = resizeCenterX - newWidth / 2
-                        controlPositionY = resizeCenterY - newHeight / 2
-                        // The inner stick is scaled together with the outer circle.
-                        pressedStateInnerBitmap.bounds = Rect(
-                            0,
-                            0,
-                            (resizeStartInnerWidth * ratio).toInt().coerceAtLeast(10),
-                            (resizeStartInnerHeight * ratio).toInt().coerceAtLeast(10)
-                        )
-                        applyOuterBounds(controlPositionX, controlPositionY, newWidth, newHeight)
+                        resizeGesture.update(event.getX(pointerIndex), event.eventTime)
+                        applyResizeBounds()
                     }
 
                     InputOverlay.EditAction.OPACITY -> {
