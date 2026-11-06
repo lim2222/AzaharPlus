@@ -68,7 +68,7 @@ android {
         minSdk = 28
         targetSdk = 35
         versionCode = autoVersion
-        versionName = "${getGitVersion()}+taiko1.0"
+        versionName = "${getGitVersion()}+taiko1.1"
 
         ndk {
             //noinspection ChromeOsAbiSupport
