@@ -18,21 +18,37 @@ import org.citra.citra_emu.utils.EmulationMenuSettings
  * Custom [BitmapDrawable] that is capable
  * of storing it's own ID.
  *
- * @param res                             [Resources] instance.
- * @param defaultStateBitmap              [Bitmap] of the default state.
- * @param pressedOneDirectionStateBitmap  [Bitmap] of the pressed state in one direction.
- * @param pressedTwoDirectionsStateBitmap [Bitmap] of the pressed state in two direction.
- * @param upId                            Identifier for the up button.
- * @param downId                          Identifier for the down button.
- * @param leftId                          Identifier for the left button.
- * @param rightId                         Identifier for the right button.
- * @param opacity                         0-255 alpha value
+ * Each of the nine possible states (released, the four single directions and the four
+ * diagonals) has its own image, so pressed states no longer have to be produced by rotating
+ * and reusing a couple of images.
+ *
+ * @param res                         [Resources] instance.
+ * @param defaultStateBitmap          [Bitmap] of the default (not pressed) state.
+ * @param upPressedStateBitmap        [Bitmap] of the pressed state when up is held.
+ * @param downPressedStateBitmap      [Bitmap] of the pressed state when down is held.
+ * @param leftPressedStateBitmap      [Bitmap] of the pressed state when left is held.
+ * @param rightPressedStateBitmap     [Bitmap] of the pressed state when right is held.
+ * @param upLeftPressedStateBitmap    [Bitmap] of the pressed state when up and left are held.
+ * @param upRightPressedStateBitmap   [Bitmap] of the pressed state when up and right are held.
+ * @param downLeftPressedStateBitmap  [Bitmap] of the pressed state when down and left are held.
+ * @param downRightPressedStateBitmap [Bitmap] of the pressed state when down and right are held.
+ * @param upId                        Identifier for the up button.
+ * @param downId                      Identifier for the down button.
+ * @param leftId                      Identifier for the left button.
+ * @param rightId                     Identifier for the right button.
+ * @param opacity                     0-255 alpha value
  */
 class InputOverlayDrawableDpad(
     res: Resources,
     defaultStateBitmap: Bitmap,
-    pressedOneDirectionStateBitmap: Bitmap,
-    pressedTwoDirectionsStateBitmap: Bitmap,
+    upPressedStateBitmap: Bitmap,
+    downPressedStateBitmap: Bitmap,
+    leftPressedStateBitmap: Bitmap,
+    rightPressedStateBitmap: Bitmap,
+    upLeftPressedStateBitmap: Bitmap,
+    upRightPressedStateBitmap: Bitmap,
+    downLeftPressedStateBitmap: Bitmap,
+    downRightPressedStateBitmap: Bitmap,
     val upId: Int,
     val downId: Int,
     val leftId: Int,
@@ -47,8 +63,14 @@ class InputOverlayDrawableDpad(
     val width: Int
     val height: Int
     private val defaultStateBitmap: BitmapDrawable
-    private val pressedOneDirectionStateBitmap: BitmapDrawable
-    private val pressedTwoDirectionsStateBitmap: BitmapDrawable
+    private val upPressedStateBitmap: BitmapDrawable
+    private val downPressedStateBitmap: BitmapDrawable
+    private val leftPressedStateBitmap: BitmapDrawable
+    private val rightPressedStateBitmap: BitmapDrawable
+    private val upLeftPressedStateBitmap: BitmapDrawable
+    private val upRightPressedStateBitmap: BitmapDrawable
+    private val downLeftPressedStateBitmap: BitmapDrawable
+    private val downRightPressedStateBitmap: BitmapDrawable
     private var upButtonState = false
     private var downButtonState = false
     private var leftButtonState = false
@@ -91,8 +113,14 @@ class InputOverlayDrawableDpad(
 
     init {
         this.defaultStateBitmap = BitmapDrawable(res, defaultStateBitmap)
-        this.pressedOneDirectionStateBitmap = BitmapDrawable(res, pressedOneDirectionStateBitmap)
-        this.pressedTwoDirectionsStateBitmap = BitmapDrawable(res, pressedTwoDirectionsStateBitmap)
+        this.upPressedStateBitmap = BitmapDrawable(res, upPressedStateBitmap)
+        this.downPressedStateBitmap = BitmapDrawable(res, downPressedStateBitmap)
+        this.leftPressedStateBitmap = BitmapDrawable(res, leftPressedStateBitmap)
+        this.rightPressedStateBitmap = BitmapDrawable(res, rightPressedStateBitmap)
+        this.upLeftPressedStateBitmap = BitmapDrawable(res, upLeftPressedStateBitmap)
+        this.upRightPressedStateBitmap = BitmapDrawable(res, upRightPressedStateBitmap)
+        this.downLeftPressedStateBitmap = BitmapDrawable(res, downLeftPressedStateBitmap)
+        this.downRightPressedStateBitmap = BitmapDrawable(res, downRightPressedStateBitmap)
         width = this.defaultStateBitmap.intrinsicWidth
         height = this.defaultStateBitmap.intrinsicHeight
         trackId = -1
@@ -183,86 +211,21 @@ class InputOverlayDrawableDpad(
     }
 
     fun draw(canvas: Canvas) {
-        val px = bounds.centerX()
-        val py = bounds.centerY()
-
-        // Pressed up
-        if (upButtonState && !leftButtonState && !rightButtonState) {
-            pressedOneDirectionStateBitmap.alpha = opacity
-            pressedOneDirectionStateBitmap.draw(canvas)
-            return
+        // Up/down and left/right are mutually exclusive, so at most two directions are held and
+        // exactly one of the nine images matches the current state.
+        val bitmap = when {
+            upButtonState && leftButtonState -> upLeftPressedStateBitmap
+            upButtonState && rightButtonState -> upRightPressedStateBitmap
+            downButtonState && leftButtonState -> downLeftPressedStateBitmap
+            downButtonState && rightButtonState -> downRightPressedStateBitmap
+            upButtonState -> upPressedStateBitmap
+            downButtonState -> downPressedStateBitmap
+            leftButtonState -> leftPressedStateBitmap
+            rightButtonState -> rightPressedStateBitmap
+            else -> defaultStateBitmap
         }
-
-        // Pressed down
-        if (downButtonState && !leftButtonState && !rightButtonState) {
-            canvas.save()
-            canvas.rotate(180f, px.toFloat(), py.toFloat())
-            pressedOneDirectionStateBitmap.alpha = opacity
-            pressedOneDirectionStateBitmap.draw(canvas)
-            canvas.restore()
-            return
-        }
-
-        // Pressed left
-        if (leftButtonState && !upButtonState && !downButtonState) {
-            canvas.save()
-            canvas.rotate(270f, px.toFloat(), py.toFloat())
-            pressedOneDirectionStateBitmap.alpha = opacity
-            pressedOneDirectionStateBitmap.draw(canvas)
-            canvas.restore()
-            return
-        }
-
-        // Pressed right
-        if (rightButtonState && !upButtonState && !downButtonState) {
-            canvas.save()
-            canvas.rotate(90f, px.toFloat(), py.toFloat())
-            pressedOneDirectionStateBitmap.alpha = opacity
-            pressedOneDirectionStateBitmap.draw(canvas)
-            canvas.restore()
-            return
-        }
-
-        // Pressed up left
-        if (upButtonState && leftButtonState && !rightButtonState) {
-            pressedTwoDirectionsStateBitmap.alpha = opacity
-            pressedTwoDirectionsStateBitmap.draw(canvas)
-            return
-        }
-
-        // Pressed up right
-        if (upButtonState && !leftButtonState && rightButtonState) {
-            canvas.save()
-            canvas.rotate(90f, px.toFloat(), py.toFloat())
-            pressedTwoDirectionsStateBitmap.alpha = opacity
-            pressedTwoDirectionsStateBitmap.draw(canvas)
-            canvas.restore()
-            return
-        }
-
-        // Pressed down left
-        if (downButtonState && leftButtonState && !rightButtonState) {
-            canvas.save()
-            canvas.rotate(270f, px.toFloat(), py.toFloat())
-            pressedTwoDirectionsStateBitmap.alpha = opacity
-            pressedTwoDirectionsStateBitmap.draw(canvas)
-            canvas.restore()
-            return
-        }
-
-        // Pressed down right
-        if (downButtonState && !leftButtonState && rightButtonState) {
-            canvas.save()
-            canvas.rotate(180f, px.toFloat(), py.toFloat())
-            pressedTwoDirectionsStateBitmap.alpha = opacity
-            pressedTwoDirectionsStateBitmap.draw(canvas)
-            canvas.restore()
-            return
-        }
-
-        // Not pressed
-        defaultStateBitmap.alpha = opacity
-        defaultStateBitmap.draw(canvas)
+        bitmap.alpha = opacity
+        bitmap.draw(canvas)
     }
 
     val upStatus: Int
@@ -347,8 +310,14 @@ class InputOverlayDrawableDpad(
 
     fun setBounds(left: Int, top: Int, right: Int, bottom: Int) {
         defaultStateBitmap.setBounds(left, top, right, bottom)
-        pressedOneDirectionStateBitmap.setBounds(left, top, right, bottom)
-        pressedTwoDirectionsStateBitmap.setBounds(left, top, right, bottom)
+        upPressedStateBitmap.setBounds(left, top, right, bottom)
+        downPressedStateBitmap.setBounds(left, top, right, bottom)
+        leftPressedStateBitmap.setBounds(left, top, right, bottom)
+        rightPressedStateBitmap.setBounds(left, top, right, bottom)
+        upLeftPressedStateBitmap.setBounds(left, top, right, bottom)
+        upRightPressedStateBitmap.setBounds(left, top, right, bottom)
+        downLeftPressedStateBitmap.setBounds(left, top, right, bottom)
+        downRightPressedStateBitmap.setBounds(left, top, right, bottom)
     }
 
     val bounds: Rect

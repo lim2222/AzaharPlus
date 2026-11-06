@@ -1133,8 +1133,14 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 initializeOverlayDpad(
                     context,
                     R.drawable.dpad,
-                    R.drawable.dpad_pressed_one_direction,
-                    R.drawable.dpad_pressed_two_directions,
+                    R.drawable.dpad_up_pressed,
+                    R.drawable.dpad_down_pressed,
+                    R.drawable.dpad_left_pressed,
+                    R.drawable.dpad_right_pressed,
+                    R.drawable.dpad_up_left_pressed,
+                    R.drawable.dpad_up_right_pressed,
+                    R.drawable.dpad_down_left_pressed,
+                    R.drawable.dpad_down_right_pressed,
                     NativeLibrary.ButtonType.DPAD_UP,
                     NativeLibrary.ButtonType.DPAD_DOWN,
                     NativeLibrary.ButtonType.DPAD_LEFT,
@@ -1939,21 +1945,33 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         /**
          * Initializes an [InputOverlayDrawableDpad]
          *
-         * @param context                   The current [Context].
-         * @param defaultResId              The [Bitmap] resource ID of the default sate.
-         * @param pressedOneDirectionResId  The [Bitmap] resource ID of the pressed sate in one direction.
-         * @param pressedTwoDirectionsResId The [Bitmap] resource ID of the pressed sate in two directions.
-         * @param buttonUp                  Identifier for the up button.
-         * @param buttonDown                Identifier for the down button.
-         * @param buttonLeft                Identifier for the left button.
-         * @param buttonRight               Identifier for the right button.
+         * @param context                        The current [Context].
+         * @param defaultResId                   The [Bitmap] resource ID of the default state.
+         * @param upPressedResId                 The [Bitmap] resource ID of the pressed state when up is held.
+         * @param downPressedResId               The [Bitmap] resource ID of the pressed state when down is held.
+         * @param leftPressedResId               The [Bitmap] resource ID of the pressed state when left is held.
+         * @param rightPressedResId              The [Bitmap] resource ID of the pressed state when right is held.
+         * @param upLeftPressedResId             The [Bitmap] resource ID of the pressed state when up and left are held.
+         * @param upRightPressedResId            The [Bitmap] resource ID of the pressed state when up and right are held.
+         * @param downLeftPressedResId           The [Bitmap] resource ID of the pressed state when down and left are held.
+         * @param downRightPressedResId          The [Bitmap] resource ID of the pressed state when down and right are held.
+         * @param buttonUp                       Identifier for the up button.
+         * @param buttonDown                     Identifier for the down button.
+         * @param buttonLeft                     Identifier for the left button.
+         * @param buttonRight                    Identifier for the right button.
          * @return the initialized [InputOverlayDrawableDpad]
          */
         private fun initializeOverlayDpad(
             context: Context,
             defaultResId: Int,
-            pressedOneDirectionResId: Int,
-            pressedTwoDirectionsResId: Int,
+            upPressedResId: Int,
+            downPressedResId: Int,
+            leftPressedResId: Int,
+            rightPressedResId: Int,
+            upLeftPressedResId: Int,
+            upRightPressedResId: Int,
+            downLeftPressedResId: Int,
+            downRightPressedResId: Int,
             buttonUp: Int,
             buttonDown: Int,
             buttonLeft: Int,
@@ -1980,16 +1998,27 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
             val opacity: Int = getOpacityPerOrient(NativeLibrary.ButtonType.DPAD.toString(), orientation)
 
-            // Initialize the InputOverlayDrawableDpad.
+            // Initialize the InputOverlayDrawableDpad. Every state has its own image.
             val defaultStateBitmap = getBitmap(context, defaultResId, scale)
-            val pressedOneDirectionStateBitmap = getBitmap(context, pressedOneDirectionResId, scale)
-            val pressedTwoDirectionsStateBitmap =
-                getBitmap(context, pressedTwoDirectionsResId, scale)
+            val upPressedStateBitmap = getBitmap(context, upPressedResId, scale)
+            val downPressedStateBitmap = getBitmap(context, downPressedResId, scale)
+            val leftPressedStateBitmap = getBitmap(context, leftPressedResId, scale)
+            val rightPressedStateBitmap = getBitmap(context, rightPressedResId, scale)
+            val upLeftPressedStateBitmap = getBitmap(context, upLeftPressedResId, scale)
+            val upRightPressedStateBitmap = getBitmap(context, upRightPressedResId, scale)
+            val downLeftPressedStateBitmap = getBitmap(context, downLeftPressedResId, scale)
+            val downRightPressedStateBitmap = getBitmap(context, downRightPressedResId, scale)
             val overlayDrawable = InputOverlayDrawableDpad(
                 res,
                 defaultStateBitmap,
-                pressedOneDirectionStateBitmap,
-                pressedTwoDirectionsStateBitmap,
+                upPressedStateBitmap,
+                downPressedStateBitmap,
+                leftPressedStateBitmap,
+                rightPressedStateBitmap,
+                upLeftPressedStateBitmap,
+                upRightPressedStateBitmap,
+                downLeftPressedStateBitmap,
+                downRightPressedStateBitmap,
                 buttonUp,
                 buttonDown,
                 buttonLeft,
