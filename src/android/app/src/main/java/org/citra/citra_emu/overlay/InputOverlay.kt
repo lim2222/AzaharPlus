@@ -16,7 +16,6 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.drawable.VectorDrawable
 import android.os.Build
-import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -779,7 +778,8 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     private fun pressTaTaCon(
         t: InputOverlayDrawableTaTaCon,
         region: TaTaConRegion,
-        pointerId: Int
+        pointerId: Int,
+        eventTime: Long
     ): Boolean {
         if (t.getTrackId(region) != -1) return false
         t.setTrackId(region, pointerId)
@@ -789,7 +789,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             t.getLegacyId(region),
             NativeLibrary.ButtonState.PRESSED
         )
-        triggerTaTaConHapticFeedback()
+        triggerTaTaConHapticFeedback(region, eventTime)
         return true
     }
 
@@ -851,7 +851,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                 val region = t.getRegionAt(x, y)
                 if (region != null && !isTaTaConBlocked(region, x, y)) {
                     val pid = event.getPointerId(index)
-                    if (!pressTaTaCon(t, region, pid)) {
+                    if (!pressTaTaCon(t, region, pid, event.eventTime)) {
                         // Region already held by another finger: swallow this one.
                         tataconSwallowedPointers.add(pid)
                     }
@@ -870,7 +870,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
                     val region = t.getRegionAt(x, y)?.takeIf { !isTaTaConBlocked(it, x, y) }
                     if (region != current) {
                         releaseTaTaCon(t, current)
-                        if (region != null) pressTaTaCon(t, region, pid)
+                        if (region != null) pressTaTaCon(t, region, pid, event.eventTime)
                         invalidate()
                     }
                 }
@@ -984,24 +984,56 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
     }
 
     /**
-     * Haptic feedback for a drum hit. Hits inside the debounce window are ignored so a second
-     * finger does not cancel the running vibration; rapid hits get a softer, longer pulse.
+     * Haptic feedback for a drum hit. The first hit always vibrates immediately; there is no
+     * buffering to wait for a possible second hit, which would make the feedback feel sluggish.
+     *
+     * A big note is two fingers landing at practically the same time on opposite sides of the
+     * same kind of region (head with head, rim with rim), after a moment of silence. It gets a
+     * longer, heavier pulse that replaces the first hit's vibration; both start at full
+     * amplitude, so the replacement is seamless.
+     *
+     * Medium hits are ignored inside the debounce window so a second finger does not cancel the
+     * running vibration; rapid hits get a softer, longer pulse.
+     *
+     * [eventTime] comes from [MotionEvent.getEventTime], so timing is not affected by main thread
+     * jitter.
      */
-    private fun triggerTaTaConHapticFeedback() {
+    private fun triggerTaTaConHapticFeedback(region: TaTaConRegion, eventTime: Long) {
         if (!EmulationMenuSettings.hapticFeedback) return
         val v = vibrator ?: return
         if (!v.hasVibrator()) return
 
+        val previousRegion = lastTaTaConHitRegion
+        val isBigPair = BIG_HIT_ENABLED && previousRegion != null &&
+            eventTime - lastTaTaConHitTime in 0..BIG_HIT_PAIR_WINDOW_MS &&
+            previousRegion.isLeftSide != region.isLeftSide &&
+            previousRegion.isHead == region.isHead &&
+            !lastTaTaConPairWasBig &&
+            lastTaTaConHitTime - prevTaTaConHitTime >= BIG_HIT_QUIET_BEFORE_MS
+
+        prevTaTaConHitTime = lastTaTaConHitTime
+        lastTaTaConHitTime = eventTime
+        lastTaTaConHitRegion = region
+        lastTaTaConPairWasBig = isBigPair
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            // No amplitude control before Android 8; still make a big note feel heavier.
             @Suppress("DEPRECATION")
-            v.vibrate(80L)
+            v.vibrate(if (isBigPair) BIG_HIT_DURATION_MS else 80L)
+            lastTaTaConHapticTime = eventTime
             return
         }
 
-        val now = SystemClock.uptimeMillis()
-        val delta = now - lastTaTaConHapticTime
+        if (isBigPair) {
+            // Bypasses the debounce on purpose; replaces the first hit's pulse.
+            lastTaTaConHapticTime = eventTime
+            v.vibrate(VibrationEffect.createOneShot(BIG_HIT_DURATION_MS, BIG_HIT_AMPLITUDE))
+            return
+        }
+
+        val delta = eventTime - lastTaTaConHapticTime
         if (delta < HAPTIC_TATACON_DEBOUNCE_MS) return
-        lastTaTaConHapticTime = now
+        lastTaTaConHapticTime = eventTime // only updated for hits that pass the debounce
 
         val strength = HAPTIC_TATACON_STRENGTH
         val norm = strength / 255f
@@ -1751,7 +1783,19 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         private const val HAPTIC_TATACON_DEBOUNCE_MS = 35L
         private const val HAPTIC_TATACON_RAPID_WINDOW_MS = 85L
         private const val HAPTIC_TATACON_STRENGTH = 255
-        private var lastTaTaConHapticTime = 0L
+
+        /** Two-finger big note: opposite sides of the same region kind, very close in time. */
+        private const val BIG_HIT_ENABLED = true
+        private const val BIG_HIT_PAIR_WINDOW_MS = 25L
+        private const val BIG_HIT_QUIET_BEFORE_MS = 110L
+        private const val BIG_HIT_DURATION_MS = 130L
+        private const val BIG_HIT_AMPLITUDE = 255
+
+        private var lastTaTaConHapticTime = 0L // last vibration actually fired
+        private var prevTaTaConHitTime = 0L // the hit before lastTaTaConHitTime
+        private var lastTaTaConHitTime = 0L // last hit, even if its vibration was debounced
+        private var lastTaTaConHitRegion: TaTaConRegion? = null
+        private var lastTaTaConPairWasBig = false
 
         // Overlay layout settings are stored per game (see OverlayPrefs).
         private val preferences

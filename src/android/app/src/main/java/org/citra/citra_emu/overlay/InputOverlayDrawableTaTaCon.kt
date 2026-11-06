@@ -25,6 +25,13 @@ enum class TaTaConRegion {
 
     val isHead: Boolean
         get() = this != RIM_LEFT && this != RIM_RIGHT
+
+    /**
+     * Which half of the drum this region belongs to. Used to recognise a big note, which is
+     * struck on opposite sides of the same kind of region.
+     */
+    val isLeftSide: Boolean
+        get() = this == HEAD_UP_LEFT || this == HEAD_DOWN_LEFT || this == RIM_LEFT
 }
 
 /**
