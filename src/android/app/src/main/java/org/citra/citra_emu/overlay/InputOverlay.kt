@@ -208,6 +208,9 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator?
         }
     }
+    // Whether the device vibrator supports the PRIMITIVE_THUD composition primitive
+    // (Android 11+, needs a good motor). Probed once, lazily.
+    private var thudPrimitiveSupported: Boolean? = null
     private val settingsViewModel = NativeLibrary.sEmulationActivity.get()!!.settingsViewModel
 
     // Stores the ID of the pointer that interacted with the 3DS touchscreen.
@@ -1019,7 +1022,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             // No amplitude control before Android 8; still make a big note feel heavier.
             @Suppress("DEPRECATION")
-            v.vibrate(if (isBigPair) BIG_HIT_DURATION_MS else 80L)
+            v.vibrate(if (isBigPair) BIG_HIT_THUD_TIMINGS_MS.sum() else 80L)
             lastTaTaConHapticTime = eventTime
             return
         }
@@ -1027,7 +1030,7 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
         if (isBigPair) {
             // Bypasses the debounce on purpose; replaces the first hit's pulse.
             lastTaTaConHapticTime = eventTime
-            v.vibrate(VibrationEffect.createOneShot(BIG_HIT_DURATION_MS, BIG_HIT_AMPLITUDE))
+            vibrateTaTaConBigHit(v)
             return
         }
 
@@ -1047,6 +1050,46 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
             amplitude = strength
         }
         v.vibrate(VibrationEffect.createOneShot(duration, amplitude))
+    }
+
+    /**
+     * Vibrates the taiko "big note" thud: a heavy attack, a sustained motor hum and a fading
+     * aftershock, instead of a single flat buzz that ends before the motor is even heard.
+     *
+     * - PRIMITIVE_THUD composition primitives when the motor supports them: a chain of decaying
+     *   thuds with small gaps.
+     * - otherwise a waveform with the same envelope: full-strength attack, sustained mid section
+     *   at 60%, fading tail at 30%.
+     */
+    private fun vibrateTaTaConBigHit(v: Vibrator) {
+        val amp = HAPTIC_TATACON_STRENGTH.coerceIn(1, 255)
+        val scale = amp / 255f
+
+        if (thudPrimitiveSupported == null) {
+            thudPrimitiveSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                hasThudPrimitive(v)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && thudPrimitiveSupported == true) {
+            v.vibrate(
+                VibrationEffect.startComposition()
+                    .addPrimitive(VibrationEffect.Composition.PRIMITIVE_THUD, scale)
+                    .addPrimitive(VibrationEffect.Composition.PRIMITIVE_THUD, scale * 0.6f, 30)
+                    .addPrimitive(VibrationEffect.Composition.PRIMITIVE_THUD, scale * 0.3f, 50)
+                    .compose()
+            )
+            return
+        }
+
+        // No thud primitive: the same envelope as a plain waveform.
+        val amplitudes = IntArray(BIG_HIT_THUD_SCALES.size) { i ->
+            maxOf(1, Math.round(amp * BIG_HIT_THUD_SCALES[i]))
+        }
+        v.vibrate(VibrationEffect.createWaveform(BIG_HIT_THUD_TIMINGS_MS, amplitudes, -1))
+    }
+
+    private fun hasThudPrimitive(v: Vibrator): Boolean {
+        val supported = v.arePrimitivesSupported(VibrationEffect.Composition.PRIMITIVE_THUD)
+        return supported.isNotEmpty() && supported[0]
     }
 
     private fun addOverlayControls(orientation: String) {
@@ -1786,10 +1829,12 @@ class InputOverlay(context: Context?, attrs: AttributeSet?) :
 
         /** Two-finger big note: opposite sides of the same region kind, very close in time. */
         private const val BIG_HIT_ENABLED = true
-        private const val BIG_HIT_PAIR_WINDOW_MS = 25L
+        private const val BIG_HIT_PAIR_WINDOW_MS = 50L
         private const val BIG_HIT_QUIET_BEFORE_MS = 110L
-        private const val BIG_HIT_DURATION_MS = 130L
-        private const val BIG_HIT_AMPLITUDE = 255
+
+        /** Heavy thud for a big note: full attack, sustained mid section, fading aftershock. */
+        private val BIG_HIT_THUD_TIMINGS_MS = longArrayOf(35L, 150L, 75L)
+        private val BIG_HIT_THUD_SCALES = floatArrayOf(1.0f, 0.6f, 0.3f)
 
         private var lastTaTaConHapticTime = 0L // last vibration actually fired
         private var prevTaTaConHitTime = 0L // the hit before lastTaTaConHitTime
